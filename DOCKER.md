@@ -35,6 +35,7 @@ The local Compose defaults are intentionally development-safe, not sales-ready:
 - Configure live PayPal client credentials and a registered `PAYPAL_WEBHOOK_ID`; the API refuses incomplete production payment setup.
 - `CARD_PROCESSOR_READY` defaults to `false`. Keep it disabled until a PCI-compliant hosted card checkout is integrated; the API rejects card orders while it is disabled.
 - Pending PayPal inventory reservations expire after `PAYMENT_RESERVATION_TTL_SECONDS` (default three hours) and are released by the API sweep. In a multi-instance deployment, move this sweep to a single durable worker.
+- Customers can choose PayPal (redirected to PayPal at checkout) or cash on delivery. A pending PayPal order exposes a server-validated Pay now action in My orders; abandoned/expired orders are cancelled and stock is returned.
 - Checkout requests use an `Idempotency-Key` so browser retries do not create duplicate orders; keep the key stable for the lifetime of one checkout attempt.
 - Customer favorites are account-backed (`/api/v1/favorites`), so a signed-in customer sees the same saved items on every device. Newsletter signups and contact requests are persisted in `newsletter_subscribers` and `contact_messages`; staff can review the latter at `/api/v1/admin/contact-messages`.
 - Catalog and shipping are stored in USD. Migration `20260829100000_convert_prices_to_usd_and_returns` converts the existing sample catalog once at 25,000 VND = 1 USD; review the resulting prices before enabling live sales.

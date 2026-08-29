@@ -10,7 +10,7 @@ import { PAYMENT_METHOD_IDS, type PaymentMethodId, type UpdatePaymentSettingsDto
 
 export interface PaymentMethodConfig {
   id: PaymentMethodId;
-  provider: "CARD" | "PAYPAL";
+  provider: "CARD" | "PAYPAL" | "COD";
   label: string;
   description: string;
   enabled: boolean;
@@ -81,6 +81,7 @@ const DEFAULT_METHODS: PaymentMethodConfig[] = [
   // processor is integrated. The API must never accept raw PAN/CVV data.
   { id: "CARD", provider: "CARD", label: "Credit & debit cards", description: "Secure card checkout will be available after a hosted card processor is configured.", enabled: false, setupNote: "Not available until a PCI-compliant hosted checkout is configured; never enter card details here." },
   { id: "PAYPAL", provider: "PAYPAL", label: "PayPal", description: "PayPal checkout with cards, Pay Later and eligible funding sources.", enabled: true, setupNote: "Requires PayPal client ID and secret in the server environment." },
+  { id: "COD", provider: "COD", label: "Cash on delivery", description: "Pay in cash when your order arrives. No online payment is required at checkout.", enabled: true, setupNote: "The order is confirmed now and marked unpaid until delivery is collected." },
 ];
 
 @Injectable()
@@ -263,6 +264,58 @@ export class PaymentsService {
       return { order, paypalOrderId, approvalUrl, expiresIn: 10_800 };
     } catch (error) {
       await this.orders.failPendingPayment(order.id, customerId, "PayPal checkout could not be created");
+      if (error instanceof ServiceUnavailableException) throw error;
+      throw new ServiceUnavailableException("PayPal checkout is temporarily unavailable");
+    }
+  }
+
+  /** Re-open an abandoned local PayPal order without creating a second order
+   * or reserving stock a second time. This is used by My orders when an older
+   * pending checkout has no usable approval URL anymore. */
+  async resumePayPalCheckout(orderId: string, customerId: string): Promise<PayPalCheckoutStartResponse> {
+    const configured = await this.getPayPalCheckoutConfig();
+    const current = await this.prisma.order.findFirst({ where: { id: orderId, customerId }, include: { payment: true } });
+    if (!current || !current.payment) throw new BadRequestException("PayPal order not found");
+    if (current.payment.method !== "PAYPAL" || current.payment.status !== "PENDING" || current.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException("This order is no longer payable");
+    }
+    const existing = this.readPayPalPayload(current.payment.providerPayload);
+    if (existing?.paypalOrderId && existing.approvalUrl && (!current.payment.checkoutExpiresAt || current.payment.checkoutExpiresAt.getTime() > Date.now())) {
+      const expiresAt = current.payment.checkoutExpiresAt?.getTime() ?? Date.now() + 10_800_000;
+      return { order: await this.orders.getById(orderId), paypalOrderId: existing.paypalOrderId, approvalUrl: existing.approvalUrl, expiresIn: Math.max(1, Math.floor((expiresAt - Date.now()) / 1000)) };
+    }
+
+    const order = await this.orders.getById(orderId);
+    try {
+      const accessToken = await this.getPayPalAccessToken(configured.apiBase, configured.clientId, configured.clientSecret);
+      const amount = new Prisma.Decimal(order.totalAmount).toFixed(2);
+      const response = await this.fetchWithTimeout(`${configured.apiBase}/v2/checkout/orders`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+          "PayPal-Request-ID": `aquarium-resume-${order.id}`,
+          ...(this.config.get<string | undefined>("PAYPAL_PARTNER_ATTRIBUTION_ID") ? { "PayPal-Partner-Attribution-Id": this.config.get<string>("PAYPAL_PARTNER_ATTRIBUTION_ID") } : {}),
+        },
+        body: JSON.stringify({
+          intent: "CAPTURE",
+          purchase_units: [{ reference_id: order.orderNumber, invoice_id: order.orderNumber, description: `Aquarium Shop order ${order.orderNumber}`, amount: { currency_code: "USD", value: amount } }],
+          application_context: { brand_name: "Aquarium Shop", user_action: "PAY_NOW", shipping_preference: "NO_SHIPPING", return_url: this.payPalCheckoutUrl("return", order.id), cancel_url: this.payPalCheckoutUrl("cancel", order.id) },
+        }),
+      });
+      const data = await this.readJson(response);
+      if (!response.ok) throw new ServiceUnavailableException("PayPal could not create the checkout session");
+      const paypalOrderId = typeof data.id === "string" ? data.id : "";
+      const approvalUrl = this.getPayPalApprovalUrl(data.links);
+      if (!paypalOrderId || !approvalUrl || data.status !== "CREATED") throw new ServiceUnavailableException("PayPal returned an invalid checkout session");
+      const payload: PayPalPaymentPayload = { paypalOrderId, approvalUrl, amount, currencyCode: "USD", status: "CREATED", createdAt: new Date().toISOString() };
+      const reservationTtl = this.config.get<number>("PAYMENT_RESERVATION_TTL_SECONDS", 10_800);
+      const updated = await this.prisma.payment.updateMany({ where: { orderId: order.id, status: "PENDING" }, data: { providerPayload: payload as Prisma.InputJsonValue, checkoutExpiresAt: new Date(Date.now() + reservationTtl * 1000) } });
+      if (updated.count !== 1) throw new BadRequestException("This PayPal checkout is no longer payable");
+      return { order: await this.orders.getById(order.id), paypalOrderId, approvalUrl, expiresIn: reservationTtl };
+    } catch (error) {
+      await this.orders.failPendingPayment(order.id, customerId, "PayPal checkout could not be resumed");
       if (error instanceof ServiceUnavailableException) throw error;
       throw new ServiceUnavailableException("PayPal checkout is temporarily unavailable");
     }

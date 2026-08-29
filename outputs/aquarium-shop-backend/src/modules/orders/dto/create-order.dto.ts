@@ -21,6 +21,7 @@ import {
 export const CHECKOUT_PAYMENT_METHODS = [
   "CARD",
   "PAYPAL",
+  "COD",
 ] as const;
 
 export type CheckoutPaymentMethod = (typeof CHECKOUT_PAYMENT_METHODS)[number];

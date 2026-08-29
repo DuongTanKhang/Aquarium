@@ -12,14 +12,14 @@ import { EmailService } from "../auth/email.service.js";
 
 const orderInclude = {
   items: { select: { id: true, productId: true, productName: true, sku: true, unitPrice: true, quantity: true, subtotal: true } },
-  payment: { select: { method: true, status: true, amount: true, transactionCode: true, paidAt: true, providerPayload: true } },
+  payment: { select: { method: true, status: true, amount: true, transactionCode: true, paidAt: true, providerPayload: true, checkoutExpiresAt: true } },
   customer: { select: { id: true, email: true, fullName: true } },
   statusHistory: { select: { status: true, note: true, createdAt: true }, orderBy: { createdAt: "asc" as const } },
 } satisfies Prisma.OrderInclude;
 
 type OrderWithRelations = Prisma.OrderGetPayload<{ include: typeof orderInclude }>;
 
-const DEFAULT_CHECKOUT_METHODS = new Set(["PAYPAL"]);
+const DEFAULT_CHECKOUT_METHODS = new Set(["PAYPAL", "COD"]);
 
 const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PENDING]: [OrderStatus.CONFIRMED, OrderStatus.CANCELLED],
@@ -60,7 +60,7 @@ export interface PublicOrderResponse {
   shippingFee: string;
   totalAmount: string;
   items: Array<{ productName: string; quantity: number; subtotal: string }>;
-  payment: { method: string; status: string; amount: string } | null;
+  payment: { method: string; status: string; amount: string; approvalUrl: string | null; checkoutExpiresAt: Date | null } | null;
   statusHistory: Array<{ status: OrderStatus; note: string | null; createdAt: Date }>;
   createdAt: Date;
   updatedAt: Date;
@@ -129,11 +129,14 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         where: { id: "default" },
         select: { methods: true },
       });
-      const selectedMethodEnabled = !settings
-        ? DEFAULT_CHECKOUT_METHODS.has(dto.paymentMethod)
-        : Array.isArray(settings.methods)
-          ? settings.methods.some((method: unknown) => typeof method === "object" && method !== null && (method as { id?: unknown }).id === dto.paymentMethod && (method as { enabled?: unknown }).enabled === true)
-          : DEFAULT_CHECKOUT_METHODS.has(dto.paymentMethod);
+      const storedMethod = Array.isArray(settings?.methods)
+        ? settings.methods.find((method: unknown) => typeof method === "object" && method !== null && (method as { id?: unknown }).id === dto.paymentMethod) as { enabled?: unknown } | undefined
+        : undefined;
+      // Older databases may have a settings row created before COD existed.
+      // Missing methods use the built-in default; an explicit false disables it.
+      const selectedMethodEnabled = storedMethod
+        ? storedMethod.enabled === true
+        : DEFAULT_CHECKOUT_METHODS.has(dto.paymentMethod);
       if (!selectedMethodEnabled) {
         throw new BadRequestException("The selected payment method is not currently available");
       }
@@ -190,6 +193,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      const cashOnDelivery = dto.paymentMethod === "COD";
+      const orderStatus = cashOnDelivery ? OrderStatus.CONFIRMED : OrderStatus.PENDING;
       const created = await transaction.order.create({
         data: {
           orderNumber,
@@ -200,7 +205,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           customerEmail: customerEmail.toLowerCase(),
           shippingAddress: dto.shippingAddress,
           note: dto.note || null,
-          status: "PENDING",
+          status: orderStatus,
           subtotal,
           shippingFee,
           discountAmount: new Prisma.Decimal(0),
@@ -218,13 +223,13 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
           payment: {
             create: {
               method: dto.paymentMethod,
-              status: "PENDING",
+              status: cashOnDelivery ? "UNPAID" : "PENDING",
               amount: totalAmount,
-              checkoutExpiresAt: new Date(Date.now() + this.reservationTtlSeconds() * 1000),
+              ...(cashOnDelivery ? {} : { checkoutExpiresAt: new Date(Date.now() + this.reservationTtlSeconds() * 1000) }),
             },
           },
           statusHistory: {
-            create: { status: "PENDING", note: "Order placed from storefront checkout" },
+            create: { status: orderStatus, note: cashOnDelivery ? "Cash on delivery order placed" : "Order placed from storefront checkout; PayPal payment is pending" },
           },
         },
         include: orderInclude,
@@ -330,7 +335,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
   async releaseExpiredPaymentReservations(): Promise<number> {
     const cutoff = new Date(Date.now() - this.reservationTtlSeconds() * 1000);
     const pending = await this.prisma.payment.findMany({
-      where: { method: "PAYPAL", status: "PENDING", checkoutExpiresAt: { lte: new Date() }, createdAt: { lt: cutoff } },
+      where: { method: "PAYPAL", status: "PENDING", OR: [{ checkoutExpiresAt: { lte: new Date() } }, { checkoutExpiresAt: null }], createdAt: { lt: cutoff } },
       select: { orderId: true, order: { select: { customerId: true } } },
       take: 100,
     });
@@ -389,7 +394,13 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       shippingFee: row.shippingFee.toString(),
       totalAmount: row.totalAmount.toString(),
       items: row.items.map((item) => ({ productName: item.productName, quantity: item.quantity, subtotal: item.subtotal.toString() })),
-      payment: row.payment ? { method: row.payment.method, status: row.payment.status, amount: row.payment.amount.toString() } : null,
+      payment: row.payment ? {
+        method: row.payment.method,
+        status: row.payment.status,
+        amount: row.payment.amount.toString(),
+        approvalUrl: row.payment.method === "PAYPAL" && row.payment.status === "PENDING" ? this.publicPayPalApprovalUrl(row.payment.providerPayload) : null,
+        checkoutExpiresAt: row.payment.checkoutExpiresAt,
+      } : null,
       statusHistory: row.statusHistory.map((entry) => ({ status: entry.status, note: entry.note, createdAt: entry.createdAt })),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -404,6 +415,12 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       if (!exists) return candidate;
     }
     throw new ConflictException("Could not allocate an order number; please try again");
+  }
+
+  private publicPayPalApprovalUrl(payload: Prisma.JsonValue | null): string | null {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const value = (payload as Record<string, unknown>).approvalUrl;
+    return typeof value === "string" && /^https:\/\/([a-z0-9-]+\.)?paypal\.com\//i.test(value) ? value : null;
   }
 
   async list(query: OrderQueryDto): Promise<{ data: OrderResponse[]; meta: PaginationMeta }> {
@@ -443,7 +460,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       if (current.status !== dto.status && !ORDER_TRANSITIONS[current.status].includes(dto.status)) {
         throw new ConflictException(`Cannot move an order from ${current.status.toLowerCase()} to ${dto.status.toLowerCase()}`);
       }
-      if (dto.status !== OrderStatus.PENDING && dto.status !== OrderStatus.CANCELLED && current.payment?.status !== "PAID") {
+      const cashOnDelivery = current.payment?.method === "COD";
+      if (dto.status !== OrderStatus.PENDING && dto.status !== OrderStatus.CANCELLED && current.payment?.status !== "PAID" && !cashOnDelivery) {
         throw new ConflictException("An order must have a confirmed payment before fulfillment can continue");
       }
       if (dto.status === OrderStatus.CANCELLED && current.payment?.status === "PAID") {

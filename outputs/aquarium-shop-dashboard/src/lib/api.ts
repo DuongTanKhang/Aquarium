@@ -178,7 +178,7 @@ export interface PublicOrder {
   shippingFee: string;
   totalAmount: string;
   items: Array<{ productName: string; quantity: number; subtotal: string }>;
-  payment: { method: string; status: string; amount: string } | null;
+  payment: { method: string; status: string; amount: string; approvalUrl: string | null; checkoutExpiresAt: string | null } | null;
   statusHistory: Array<{ status: string; note: string | null; createdAt: string }>;
   createdAt: string;
   updatedAt: string;
@@ -227,10 +227,10 @@ export interface LowStockProduct {
   updatedAt: string;
 }
 
-export type PaymentMethodId = "CARD" | "PAYPAL";
+export type PaymentMethodId = "CARD" | "PAYPAL" | "COD";
 export interface PaymentMethodConfig {
   id: PaymentMethodId;
-  provider: "CARD" | "PAYPAL";
+  provider: "CARD" | "PAYPAL" | "COD";
   label: string;
   description: string;
   enabled: boolean;
@@ -486,6 +486,12 @@ export function createPayPalCheckout(input: CreateOrderInput, idempotencyKey?: s
     method: "POST",
     headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
     body: JSON.stringify(input),
+  });
+}
+
+export function resumePayPalCheckout(orderId: string): Promise<PayPalCheckoutStartResponse> {
+  return apiRequest<PayPalCheckoutStartResponse>(`/payments/paypal/orders/${encodeURIComponent(orderId)}/resume`, {
+    method: "POST",
   });
 }
 

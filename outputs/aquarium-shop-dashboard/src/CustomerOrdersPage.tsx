@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { ApiError, createReturnRequest, listMyOrders, listMyReturnRequests, lookupPublicOrder, type CustomerUser, type PublicOrder, type ReturnRequest, type ReturnRequestType } from "./lib/api";
+import { ApiError, createReturnRequest, listMyOrders, listMyReturnRequests, lookupPublicOrder, resumePayPalCheckout, type CustomerUser, type PublicOrder, type ReturnRequest, type ReturnRequestType } from "./lib/api";
 
 interface CustomerOrdersPageProps {
   customer?: CustomerUser | null;
@@ -49,6 +49,13 @@ function stepIndex(status: string): number {
   return index === -1 ? 0 : index;
 }
 
+function isPayPalPaymentOpen(order: PublicOrder): boolean {
+  if (order.payment?.method !== "PAYPAL" || order.payment.status !== "PENDING" || !order.payment.approvalUrl) return false;
+  if (!order.payment.checkoutExpiresAt) return true;
+  const expiresAt = new Date(order.payment.checkoutExpiresAt).getTime();
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
 export default function CustomerOrdersPage({ customer = null, onBack }: CustomerOrdersPageProps) {
   const [savedRefs, setSavedRefs] = useState<SavedOrderRef[]>(readSavedRefs);
   const [orders, setOrders] = useState<PublicOrder[]>([]);
@@ -56,6 +63,7 @@ export default function CustomerOrdersPage({ customer = null, onBack }: Customer
   const [form, setForm] = useState({ email: savedRefs[0]?.email ?? "", orderNumber: savedRefs[0]?.orderNumber ?? "" });
   const [loading, setLoading] = useState(Boolean(customer || savedRefs.length));
   const [lookupLoading, setLookupLoading] = useState(false);
+  const [payingOrderId, setPayingOrderId] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -116,6 +124,24 @@ export default function CustomerOrdersPage({ customer = null, onBack }: Customer
     }
   };
 
+  const payForOrder = async (order: PublicOrder) => {
+    if (isPayPalPaymentOpen(order) && order.payment?.approvalUrl) {
+      window.location.assign(order.payment.approvalUrl);
+      return;
+    }
+    if (order.payment?.method !== "PAYPAL" || order.payment.status !== "PENDING" || payingOrderId) return;
+    setPayingOrderId(order.id);
+    setError("");
+    try {
+      const checkout = await resumePayPalCheckout(order.id);
+      window.location.assign(checkout.approvalUrl);
+    } catch (requestError: unknown) {
+      setError(requestError instanceof ApiError ? requestError.message : "We could not reopen PayPal checkout. Please place a new order.");
+    } finally {
+      setPayingOrderId("");
+    }
+  };
+
   return (
     <main className="store-orders-page">
       <div className="store-orders-shell">
@@ -129,7 +155,7 @@ export default function CustomerOrdersPage({ customer = null, onBack }: Customer
         </section>
 
         <section className="orders-list-section"><div className="orders-list-heading"><div><span className="store-kicker">Order history</span><h2>Arrivals in progress.</h2></div><span>{loading ? "Loading…" : `${orders.length} ${orders.length === 1 ? "order" : "orders"}`}</span></div>
-          {loading ? <div className="orders-list-loading"><span /><span /></div> : orders.length ? <div className="orders-list">{orders.map((order) => { const activeStep = stepIndex(order.status); const cancelled = order.status === "CANCELLED"; const isExpanded = expandedOrder === order.id; return <article className={`customer-order-card ${isExpanded ? "customer-order-card-expanded" : ""}`} key={order.id}><button className="customer-order-summary" onClick={() => setExpandedOrder((current) => current === order.id ? "" : order.id)} aria-expanded={isExpanded}><span className="customer-order-number">{order.orderNumber}</span><span><strong>{order.items.length ? order.items.map((item) => `${item.productName} × ${item.quantity}`).join(", ") : "Aquatic collection"}</strong><small>Placed {formatDate(order.createdAt)}</small></span><b>{formatPrice(order.totalAmount)}</b><span className={`customer-order-status ${cancelled ? "customer-order-status-cancelled" : "customer-order-status-active"}`}>{humanStatus(order.status)}</span><span className="customer-order-chevron" aria-hidden="true">⌄</span></button>{isExpanded && <div className="customer-order-detail"><div className="customer-order-detail-head"><span>Delivery journey</span><strong>{cancelled ? "This order was cancelled" : humanStatus(order.status)}</strong></div>{cancelled ? <div className="customer-order-cancelled">This order is no longer moving through delivery. Please contact us if you need help.</div> : <div className="order-tracking-steps">{ORDER_STEPS.map((step, index) => { const historyEntry = order.statusHistory.find((entry) => entry.status === step); const done = index <= activeStep; return <div className={`order-tracking-step ${done ? "order-tracking-step-done" : ""} ${step === order.status ? "order-tracking-step-current" : ""}`} key={step}><span className="order-tracking-dot">{done ? "✓" : index + 1}</span><div><strong>{humanStatus(step)}</strong><small>{historyEntry ? formatDate(historyEntry.createdAt) : index === activeStep ? "In progress" : "Coming next"}</small></div></div>; })}</div>}<div className="customer-order-detail-foot"><span>{order.items.map((item) => `${item.productName} · ${item.quantity}`).join(" / ")}</span><strong>{order.payment ? `${humanStatus(order.payment.method)} · ${humanStatus(order.payment.status)}` : "Payment pending"}</strong></div></div>}</article>; })}</div> : <div className="orders-empty"><span>◎</span><h2>No orders to show yet.</h2><p>After checkout, your orders will appear here automatically on this device.</p></div>}
+          {loading ? <div className="orders-list-loading"><span /><span /></div> : orders.length ? <div className="orders-list">{orders.map((order) => { const activeStep = stepIndex(order.status); const cancelled = order.status === "CANCELLED"; const isExpanded = expandedOrder === order.id; const pendingPayPal = order.payment?.method === "PAYPAL" && order.payment.status === "PENDING"; const payable = isPayPalPaymentOpen(order); const paymentExpired = pendingPayPal && Boolean(order.payment?.checkoutExpiresAt && new Date(order.payment.checkoutExpiresAt).getTime() <= Date.now()); return <article className={`customer-order-card ${isExpanded ? "customer-order-card-expanded" : ""}`} key={order.id}><button className="customer-order-summary" onClick={() => setExpandedOrder((current) => current === order.id ? "" : order.id)} aria-expanded={isExpanded}><span className="customer-order-number">{order.orderNumber}</span><span><strong>{order.items.length ? order.items.map((item) => `${item.productName} × ${item.quantity}`).join(", ") : "Aquatic collection"}</strong><small>Placed {formatDate(order.createdAt)}</small></span><b>{formatPrice(order.totalAmount)}</b><span className={`customer-order-status ${cancelled ? "customer-order-status-cancelled" : "customer-order-status-active"}`}>{humanStatus(order.status)}</span><span className="customer-order-chevron" aria-hidden="true">⌄</span></button>{isExpanded && <div className="customer-order-detail"><div className="customer-order-detail-head"><span>Delivery journey</span><strong>{cancelled ? "This order was cancelled" : humanStatus(order.status)}</strong></div>{cancelled ? <div className="customer-order-cancelled">This order is no longer moving through delivery. Please contact us if you need help.</div> : <div className="order-tracking-steps">{ORDER_STEPS.map((step, index) => { const historyEntry = order.statusHistory.find((entry) => entry.status === step); const done = index <= activeStep; return <div className={`order-tracking-step ${done ? "order-tracking-step-done" : ""} ${step === order.status ? "order-tracking-step-current" : ""}`} key={step}><span className="order-tracking-dot">{done ? "✓" : index + 1}</span><div><strong>{humanStatus(step)}</strong><small>{historyEntry ? formatDate(historyEntry.createdAt) : index === activeStep ? "In progress" : "Coming next"}</small></div></div>; })}</div>}<div className="customer-order-detail-foot"><span>{order.items.map((item) => `${item.productName} · ${item.quantity}`).join(" / ")}</span><div className="customer-order-payment"><strong>{order.payment ? `${humanStatus(order.payment.method)} · ${humanStatus(order.payment.status)}` : "Payment pending"}</strong>{pendingPayPal && !paymentExpired && <button type="button" className="customer-order-pay-button" disabled={payingOrderId === order.id} onClick={() => void payForOrder(order)}>{payingOrderId === order.id ? "Opening…" : "Pay now"} <span aria-hidden="true">→</span></button>}{paymentExpired && <small className="customer-order-payment-expired">Payment session expired. Please place a new order.</small>}</div></div></div>}</article>; })}</div> : <div className="orders-empty"><span>◎</span><h2>No orders to show yet.</h2><p>After checkout, your orders will appear here automatically on this device.</p></div>}
         </section>
         <CustomerReturnsPanel customer={customer} orders={orders} />
       </div>

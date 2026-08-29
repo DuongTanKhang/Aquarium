@@ -43,7 +43,7 @@ export default function PaymentWorkspace({ onSessionExpired, demoMode = false }:
     setLoading(true); setError("");
     try {
       const [paymentSettings, paymentConnections] = await Promise.all([getPaymentSettings(), getPaymentConnections()]);
-      const methods = paymentSettings.methods.filter((method) => method.id === "CARD" || method.id === "PAYPAL");
+      const methods = paymentSettings.methods.filter((method) => method.id === "CARD" || method.id === "PAYPAL" || method.id === "COD");
       const defaultMethod = methods.some((method) => method.id === paymentSettings.defaultMethod && method.enabled)
         ? paymentSettings.defaultMethod
         : methods.find((method) => method.enabled)?.id ?? "CARD";
@@ -94,7 +94,7 @@ export default function PaymentWorkspace({ onSessionExpired, demoMode = false }:
     if (!settings.methods.some((method) => method.id === settings.defaultMethod && method.enabled)) { setError("The default method must be enabled."); return; }
     setSaving(true); setError(""); setNotice("");
     try {
-      const methods = settings.methods.filter((method) => method.id === "CARD" || method.id === "PAYPAL");
+      const methods = settings.methods.filter((method) => method.id === "CARD" || method.id === "PAYPAL" || method.id === "COD");
       const saved = demoMode ? { ...settings, methods } : await updatePaymentSettings({ currency: settings.currency, defaultMethod: settings.defaultMethod, methods: methods.map(({ id, enabled }) => ({ id, enabled })) });
       setSettings(saved); if (demoMode) window.localStorage.setItem("aquarium-demo-payment-settings", JSON.stringify(saved)); setNotice("Payment settings saved.");
     } catch (requestError) { setError(displayError(requestError)); if (requestError instanceof ApiError && requestError.status === 401) { clearAccessToken(); onSessionExpired(); } }
@@ -115,5 +115,5 @@ function ProviderConnections({ connections, onOpen }: { connections: PaymentConn
 }
 
 function PaymentMethodRow({ method, onToggle }: { method: PaymentMethodConfig; onToggle: () => void }) {
-  return <div className={`payment-method-row ${method.enabled ? "payment-method-enabled" : ""}`}><span className={`payment-method-icon payment-${method.provider.toLowerCase()}`}>{method.id === "PAYPAL" ? "P" : "▣"}</span><div className="payment-method-copy"><strong>{method.label}</strong><span>{method.description}</span><small>{method.setupNote}</small></div><button type="button" className={`toggle-switch ${method.enabled ? "toggle-on" : ""}`} onClick={onToggle} aria-pressed={method.enabled}><i /></button></div>;
+  return <div className={`payment-method-row ${method.enabled ? "payment-method-enabled" : ""}`}><span className={`payment-method-icon payment-${method.provider.toLowerCase()}`}>{method.id === "PAYPAL" ? "P" : method.id === "COD" ? "$" : "▣"}</span><div className="payment-method-copy"><strong>{method.label}</strong><span>{method.description}</span><small>{method.setupNote}</small></div><button type="button" className={`toggle-switch ${method.enabled ? "toggle-on" : ""}`} onClick={onToggle} aria-pressed={method.enabled}><i /></button></div>;
 }

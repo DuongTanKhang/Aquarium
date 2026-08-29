@@ -48,6 +48,7 @@ function methodLabel(id: PaymentMethodId): string {
   return {
     CARD: "Credit or debit card",
     PAYPAL: "PayPal",
+    COD: "Cash on delivery",
   }[id];
 }
 
@@ -83,11 +84,11 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
       .then((settings) => {
         if (!active) return;
         const next = settings.methods
-          .filter((method) => method.id === "CARD" || method.id === "PAYPAL")
+          .filter((method) => method.id === "CARD" || method.id === "PAYPAL" || method.id === "COD")
           .map(({ id, label, description }) => ({ id, label, description }));
         setMethods(next);
         if (next.length && !next.some((method) => method.id === paymentMethod)) {
-          const preferred = settings.defaultMethod === "CARD" || settings.defaultMethod === "PAYPAL" ? settings.defaultMethod : "CARD";
+          const preferred = settings.defaultMethod === "CARD" || settings.defaultMethod === "PAYPAL" || settings.defaultMethod === "COD" ? settings.defaultMethod : "COD";
           setPaymentMethod(next.some((method) => method.id === preferred) ? preferred : next[0].id);
         }
         setMethodsError("");
@@ -249,11 +250,11 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
 
               <section className="checkout-card">
                 <div className="checkout-card-heading"><span>02</span><div><h2>Payment method</h2><p>Choose an enabled method from the store.</p></div></div>
-                {methodsLoading ? <div className="checkout-method-loading"><span /><span /><span /></div> : methodsError ? <div className="checkout-inline-error">{methodsError}</div> : <div className="checkout-methods">{methods.map((method) => <label className={`checkout-method ${paymentMethod === method.id ? "checkout-method-selected" : ""}`} key={method.id}><input type="radio" name="paymentMethod" value={method.id} checked={paymentMethod === method.id} onChange={() => setPaymentMethod(method.id)} /><span className="checkout-radio" /><span><strong>{method.label || methodLabel(method.id)}</strong><small>{method.description}</small></span><b>{method.id === "CARD" ? "VISA · MC · AMEX" : method.id.replace("_", " ")}</b></label>)}</div>}
+                {methodsLoading ? <div className="checkout-method-loading"><span /><span /><span /></div> : methodsError ? <div className="checkout-inline-error">{methodsError}</div> : <div className="checkout-methods">{methods.map((method) => <label className={`checkout-method ${paymentMethod === method.id ? "checkout-method-selected" : ""}`} key={method.id}><input type="radio" name="paymentMethod" value={method.id} checked={paymentMethod === method.id} onChange={() => setPaymentMethod(method.id)} /><span className="checkout-radio" /><span><strong>{method.label || methodLabel(method.id)}</strong><small>{method.description}</small></span><b>{method.id === "CARD" ? "VISA · MC · AMEX" : method.id === "COD" ? "ON ARRIVAL" : "PAYPAL"}</b></label>)}</div>}
                 <p className="checkout-payment-note"><CheckoutIcon kind="lock" /> Your payment details are handled by the selected provider. This store never asks for card numbers or bank passwords here.</p>
               </section>
               {error && <div className="checkout-submit-error" role="alert"><CheckoutIcon kind="close" />{error}</div>}
-              <button className="store-primary-button checkout-place-order" type="submit" onClick={(event) => { if (!customer) { event.preventDefault(); setAuthOpen(true); } }} disabled={submitting || paypalProcessing || methodsLoading || Boolean(methodsError) || !methods.length}>{paypalProcessing ? "Confirming PayPal payment…" : submitting ? (paymentMethod === "PAYPAL" ? "Opening PayPal…" : "Placing your order…") : <>Place order <CheckoutIcon kind="arrow" /></>}</button>
+              <button className="store-primary-button checkout-place-order" type="submit" onClick={(event) => { if (!customer) { event.preventDefault(); setAuthOpen(true); } }} disabled={submitting || paypalProcessing || methodsLoading || Boolean(methodsError) || !methods.length}>{paypalProcessing ? "Confirming PayPal payment…" : submitting ? (paymentMethod === "PAYPAL" ? "Opening PayPal…" : "Placing your order…") : paymentMethod === "PAYPAL" ? <>Continue to PayPal <CheckoutIcon kind="arrow" /></> : <>Place order <CheckoutIcon kind="arrow" /></>}</button>
               <p className="checkout-legal">By placing your order, you agree to our care, delivery and returns guidance.</p>
             </div>
 

@@ -71,6 +71,14 @@ export class PayPalController {
     return this.payments.createPayPalCheckout(dto, user.userId, idempotencyKey);
   }
 
+  @Post("orders/:id/resume")
+  @Roles(UserRole.CUSTOMER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Resume a pending PayPal checkout for an existing order" })
+  resumeCheckout(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.payments.resumePayPalCheckout(id, user.userId);
+  }
+
   @Post("orders/:id/capture")
   @Roles(UserRole.CUSTOMER)
   @ApiBearerAuth()
