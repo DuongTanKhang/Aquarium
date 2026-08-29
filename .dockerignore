@@ -1,0 +1,9 @@
+.git
+.agents
+.codex
+node_modules
+outputs/*/node_modules
+outputs/*/dist
+outputs/*/.env
+work
+*.log
