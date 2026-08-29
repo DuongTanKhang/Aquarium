@@ -4,10 +4,14 @@ import {
   type CheckoutOrderResponse,
   getCurrentUser,
   getAccessToken,
+  addFavorite,
   listPublicCategories,
   listPublicProducts,
+  listFavorites,
+  removeFavorite,
   refreshAccessToken,
   saveAccessToken,
+  subscribeNewsletter,
   type Category,
   type CustomerUser,
   type PublicProduct,
@@ -228,7 +232,10 @@ export default function Storefront() {
   const [pendingAddQuantity, setPendingAddQuantity] = useState(1);
   const favoriteStorageKey = customerUser ? `aquarium-store-favorites:${customerUser.id}` : null;
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
+  const [favoriteProducts, setFavoriteProducts] = useState<PublicProduct[]>([]);
   const [pendingFavoriteId, setPendingFavoriteId] = useState<string | null>(null);
+  const [newsletterEmail, setNewsletterEmail] = useState("");
+  const [newsletterBusy, setNewsletterBusy] = useState(false);
   const emailVerificationOpen = typeof window !== "undefined" && window.location.pathname === "/verify-email";
 
   useEffect(() => {
@@ -265,6 +272,22 @@ export default function Storefront() {
     }
     setFavoriteIds(loadFavoriteIds(favoriteStorageKey));
   }, [favoriteStorageKey]);
+
+  useEffect(() => {
+    if (!customerUser) {
+      setFavoriteProducts([]);
+      return;
+    }
+    let active = true;
+    void listFavorites().then((saved) => {
+      if (!active) return;
+      setFavoriteProducts(saved);
+      setFavoriteIds(saved.map((product) => product.id));
+    }).catch(() => {
+      // Keep the local cache visible if the account endpoint is briefly unavailable.
+    });
+    return () => { active = false; };
+  }, [customerUser?.id]);
 
   useEffect(() => {
     if (!favoriteStorageKey) return;
@@ -536,7 +559,26 @@ export default function Storefront() {
       setCustomerAuthOpen(true);
       return;
     }
-    setFavoriteIds((current) => current.includes(productId) ? current.filter((id) => id !== productId) : [...current, productId]);
+    const wasSaved = favoriteIds.includes(productId);
+    setFavoriteIds((current) => wasSaved ? current.filter((id) => id !== productId) : [...current, productId]);
+    if (wasSaved) setFavoriteProducts((current) => current.filter((product) => product.id !== productId));
+    void (async () => {
+      try {
+        if (wasSaved) {
+          await removeFavorite(productId);
+        } else {
+          const saved = await addFavorite(productId);
+          setFavoriteProducts((current) => [saved, ...current.filter((product) => product.id !== saved.id)]);
+        }
+      } catch (requestError: unknown) {
+        setFavoriteIds((current) => wasSaved ? [...current, productId] : current.filter((id) => id !== productId));
+        if (wasSaved) {
+          const product = products.find((item) => item.id === productId);
+          if (product) setFavoriteProducts((current) => [product, ...current.filter((item) => item.id !== productId)]);
+        }
+        setNotice(requestError instanceof ApiError ? requestError.message : "We could not update favorites right now.");
+      }
+    })();
   };
 
   const closeCheckout = () => {
@@ -564,11 +606,10 @@ export default function Storefront() {
     const favoriteToSave = pendingFavoriteId;
     setPendingFavoriteId(null);
     if (favoriteToSave) {
-      const key = `aquarium-store-favorites:${user.id}`;
-      const next = loadFavoriteIds(key);
-      if (!next.includes(favoriteToSave)) next.push(favoriteToSave);
-      try { window.localStorage.setItem(key, JSON.stringify(next)); } catch { /* storage can be unavailable */ }
-      setFavoriteIds(next);
+      setFavoriteIds((current) => current.includes(favoriteToSave) ? current : [...current, favoriteToSave]);
+      void addFavorite(favoriteToSave).then((saved) => {
+        setFavoriteProducts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      }).catch(() => setNotice("We could not save that favorite right now."));
     }
     const pending = pendingAddProduct;
     setPendingAddProduct(null);
@@ -589,7 +630,7 @@ export default function Storefront() {
   if (ordersOpen) return <CustomerOrdersPage customer={customerUser} onBack={closeOrders} />;
   if (accountOpen) return customerUser ? <CustomerAccountPage user={customerUser} onUpdated={setCustomerUser} onLogout={() => { setCustomerUser(null); closeAccount(); }} onBack={closeAccount} onOpenOrders={openOrders} /> : <CustomerAuthPage onAuthenticated={(user) => { setCustomerUser(user); closeAccount(); }} onBack={closeAccount} />;
   if (contactOpen) return <ContactPage onBack={closeContact} />;
-  if (favoritesOpen) return <FavoritesPage products={products.filter((product) => favoriteIds.includes(product.id))} onBack={closeFavorites} onOpenProduct={(product) => { closeFavorites(); openProductDetails(product); }} onToggleFavorite={toggleFavorite} />;
+  if (favoritesOpen) return <FavoritesPage products={favoriteProducts.length ? favoriteProducts : products.filter((product) => favoriteIds.includes(product.id))} onBack={closeFavorites} onOpenProduct={(product) => { closeFavorites(); openProductDetails(product); }} onToggleFavorite={toggleFavorite} />;
 
   return (
     <div className="storefront">
@@ -630,7 +671,7 @@ export default function Storefront() {
 
         <section className="store-care" id="care"><div><span className="store-kicker">Good to know</span><h2>Care looks<br /><em>good on you.</em></h2></div><div className="store-care-list"><div><span>01</span><strong>Choose your habitat</strong><p>Start with the right size, light and water conditions.</p></div><div><span>02</span><strong>Meet your new friend</strong><p>Every arrival comes with simple, personal care notes.</p></div><div><span>03</span><strong>Let it grow</strong><p>Watch a little ecosystem become part of home.</p></div></div></section>
 
-        <section className="store-newsletter"><div><span className="store-kicker">A note from the water</span><h2>Good things,<br /><em>once in a while.</em></h2></div><form onSubmit={(event) => { event.preventDefault(); setNotice("You're on the list — welcome to the water."); }}><p>New arrivals, care notes and a little inspiration for your tank.</p><label><input type="email" required placeholder="Your email address" aria-label="Email address" /><button type="submit" aria-label="Subscribe"><StoreIcon name="arrow" /></button></label></form></section>
+        <section className="store-newsletter"><div><span className="store-kicker">A note from the water</span><h2>Good things,<br /><em>once in a while.</em></h2></div><form onSubmit={(event) => { event.preventDefault(); if (newsletterBusy) return; const email = newsletterEmail.trim(); if (!email) return; setNewsletterBusy(true); void subscribeNewsletter(email).then(() => { setNotice("You're on the list — welcome to the water."); setNewsletterEmail(""); }).catch((requestError: unknown) => setNotice(requestError instanceof ApiError ? requestError.message : "We could not subscribe you right now.")).finally(() => setNewsletterBusy(false)); }}><p>New arrivals, care notes and a little inspiration for your tank.</p><label><input type="email" required value={newsletterEmail} onChange={(event) => setNewsletterEmail(event.target.value)} placeholder="Your email address" aria-label="Email address" /><button type="submit" aria-label="Subscribe" disabled={newsletterBusy}><StoreIcon name="arrow" /></button></label></form></section>
       </main>
 
       <footer className="store-footer"><a className="store-logo" href="/shop"><span className="store-logo-mark"><StoreIcon name="leaf" size={20} /></span><span><strong>AQUA</strong><small>THE LIVING SHOP</small></span></a><p>Thoughtful aquatics for slower, brighter days.</p><div><a href="#shop">Shop</a><a href="#care">Care</a><a href="#story">Journal</a><a href="/shop/contact" onClick={(event) => { event.preventDefault(); openContact(); }}>Contact</a><a href="/shop/favorites" onClick={(event) => { event.preventDefault(); openFavorites(); }}>Favorites</a><a href="/shop/orders" onClick={(event) => { event.preventDefault(); openOrders(); }}>My orders</a><a href="/">Admin sign in</a></div><small>© {new Date().getFullYear()} Aqua. Made with care.</small></footer>

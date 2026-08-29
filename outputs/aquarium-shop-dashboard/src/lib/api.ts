@@ -339,17 +339,23 @@ export function clearAccessToken(): void {
   window.sessionStorage.removeItem("aquarium_access_token");
 }
 
-async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
+type ApiRequestInit = RequestInit & { skipAuthRefresh?: boolean };
+
+let refreshInFlight: Promise<AuthResult> | null = null;
+
+async function apiRequest<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
+  const { skipAuthRefresh = false, ...requestInit } = init;
+  const headers = new Headers(requestInit.headers);
   headers.set("Accept", "application/json");
-  if (init.body && !headers.has("Content-Type")) {
+  if (requestInit.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   const token = getAccessToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const method = (init.method ?? "GET").toUpperCase();
+  const method = (requestInit.method ?? "GET").toUpperCase();
   const canRetry = ["GET", "HEAD", "OPTIONS"].includes(method);
+  let refreshed = false;
 
   for (let attempt = 0; ; attempt += 1) {
     const controller = new AbortController();
@@ -359,17 +365,34 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     );
     try {
       const response = await fetch(`${API_BASE}${path}`, {
-        ...init,
+        ...requestInit,
         headers,
         credentials: "include",
         // Catalog polling must always see the latest server state instead of a
         // browser-cached response. Mutating requests keep their normal behavior.
-        cache: init.cache ?? (method === "GET" ? "no-store" : undefined),
+        cache: requestInit.cache ?? (method === "GET" ? "no-store" : undefined),
         signal: controller.signal,
       });
       const payload: unknown = await response.json().catch(() => null);
 
       if (!response.ok) {
+        const authRefreshAllowed = !skipAuthRefresh && !refreshed && ![
+          "/auth/login",
+          "/auth/register",
+          "/auth/refresh",
+          "/auth/mfa/verify-login",
+        ].includes(path);
+        if (response.status === 401 && authRefreshAllowed) {
+          refreshed = true;
+          try {
+            const result = await refreshAccessToken();
+            saveAccessToken(result.accessToken);
+            headers.set("Authorization", `Bearer ${result.accessToken}`);
+            continue;
+          } catch {
+            clearAccessToken();
+          }
+        }
         if (canRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_IDEMPOTENT_RETRIES) {
           const retryAfter = Number(response.headers.get("retry-after"));
           const waitMs = Number.isFinite(retryAfter)
@@ -689,7 +712,11 @@ export function resetPassword(token: string, newPassword: string): Promise<void>
 }
 
 export function refreshAccessToken(): Promise<AuthResult> {
-  return apiRequest<AuthResult>("/auth/refresh", { method: "POST" });
+  if (!refreshInFlight) {
+    refreshInFlight = apiRequest<AuthResult>("/auth/refresh", { method: "POST", skipAuthRefresh: true })
+      .finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
 }
 
 export function logout(): Promise<void> {
@@ -701,4 +728,23 @@ export function submitContactMessage(input: { name: string; email: string; topic
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function subscribeNewsletter(email: string): Promise<{ message: string }> {
+  return apiRequest<{ message: string }>("/contact/newsletter", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function listFavorites(): Promise<PublicProduct[]> {
+  return apiRequest<PublicProduct[]>("/favorites");
+}
+
+export function addFavorite(productId: string): Promise<PublicProduct> {
+  return apiRequest<PublicProduct>(`/favorites/${encodeURIComponent(productId)}`, { method: "POST" });
+}
+
+export function removeFavorite(productId: string): Promise<{ removed: boolean }> {
+  return apiRequest<{ removed: boolean }>(`/favorites/${encodeURIComponent(productId)}`, { method: "DELETE" });
 }

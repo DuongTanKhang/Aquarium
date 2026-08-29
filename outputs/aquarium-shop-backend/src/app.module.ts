@@ -8,6 +8,7 @@ import { AuthModule } from "./modules/auth/auth.module.js";
 import { CategoriesModule } from "./modules/categories/categories.module.js";
 import { CustomersModule } from "./modules/customers/customers.module.js";
 import { ContactModule } from "./modules/contact/contact.module.js";
+import { FavoritesModule } from "./modules/favorites/favorites.module.js";
 import { DashboardModule } from "./modules/dashboard/dashboard.module.js";
 import { HealthModule } from "./modules/health/health.module.js";
 import { InventoryModule } from "./modules/inventory/inventory.module.js";
@@ -42,6 +43,7 @@ import { UsersModule } from "./modules/users/users.module.js";
     InventoryModule,
     CustomersModule,
     ContactModule,
+    FavoritesModule,
     OrdersModule,
     PaymentsModule,
     ReturnsModule,

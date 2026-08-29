@@ -96,14 +96,15 @@ export class DashboardService {
     const periodStart = new Date(now.getTime() - 30 * DAY_MS);
     const previousStart = new Date(now.getTime() - 60 * DAY_MS);
     const validOrder = { status: { not: "CANCELLED" as const } };
+    const paidOrder = { ...validOrder, payment: { is: { status: "PAID" as const } } };
 
-    const [products, orders, customers, lowStockProducts, currentRevenue, previousRevenue, currentOrders] = await Promise.all([
-      this.prisma.product.count(),
-      this.prisma.order.count(),
-      this.prisma.user.count({ where: { role: "CUSTOMER" } }),
-      this.prisma.product.count({ where: { stockQuantity: { lte: 5 }, status: "ACTIVE" } }),
-      this.prisma.order.aggregate({ where: { ...validOrder, createdAt: { gte: periodStart } }, _sum: { totalAmount: true }, _count: { _all: true } }),
-      this.prisma.order.aggregate({ where: { ...validOrder, createdAt: { gte: previousStart, lt: periodStart } }, _sum: { totalAmount: true } }),
+    const [products, orders, customers, lowStockRows, currentRevenue, previousRevenue, currentOrders] = await Promise.all([
+      this.prisma.product.count({ where: { status: "ACTIVE" } }),
+      this.prisma.order.count({ where: validOrder }),
+      this.prisma.user.count({ where: { role: "CUSTOMER", status: "ACTIVE" } }),
+      this.prisma.product.findMany({ where: { status: "ACTIVE" }, select: { stockQuantity: true, lowStockThreshold: true } }),
+      this.prisma.order.aggregate({ where: { ...paidOrder, createdAt: { gte: periodStart } }, _sum: { totalAmount: true }, _count: { _all: true } }),
+      this.prisma.order.aggregate({ where: { ...paidOrder, createdAt: { gte: previousStart, lt: periodStart } }, _sum: { totalAmount: true } }),
       this.prisma.order.findMany({
         where: { ...validOrder, createdAt: { gte: periodStart } },
         include: { items: { select: { productName: true, quantity: true } } },
@@ -115,6 +116,7 @@ export class DashboardService {
     const currentTotal = Number(currentRevenue._sum.totalAmount ?? 0);
     const previousTotal = Number(previousRevenue._sum.totalAmount ?? 0);
     const revenueChange = previousTotal === 0 ? (currentTotal > 0 ? 100 : 0) : ((currentTotal - previousTotal) / previousTotal) * 100;
+    const lowStockProducts = lowStockRows.filter((row) => row.stockQuantity <= row.lowStockThreshold).length;
     const [salesTrend, categoryMix, topProducts] = await Promise.all([
       this.buildSalesTrend(periodStart, now),
       this.buildCategoryMix(periodStart, currentTotal),
@@ -142,9 +144,10 @@ export class DashboardService {
     const periodStart = new Date(now.getTime() - safeDays * DAY_MS);
     const previousStart = new Date(now.getTime() - safeDays * 2 * DAY_MS);
     const validOrder = { status: { not: "CANCELLED" as const } };
+    const paidOrder = { ...validOrder, payment: { is: { status: "PAID" as const } } };
     const [currentRevenue, previousRevenue] = await Promise.all([
-      this.prisma.order.aggregate({ where: { ...validOrder, createdAt: { gte: periodStart } }, _sum: { totalAmount: true }, _count: { _all: true } }),
-      this.prisma.order.aggregate({ where: { ...validOrder, createdAt: { gte: previousStart, lt: periodStart } }, _sum: { totalAmount: true } }),
+      this.prisma.order.aggregate({ where: { ...paidOrder, createdAt: { gte: periodStart } }, _sum: { totalAmount: true }, _count: { _all: true } }),
+      this.prisma.order.aggregate({ where: { ...paidOrder, createdAt: { gte: previousStart, lt: periodStart } }, _sum: { totalAmount: true } }),
     ]);
     const revenue = Number(currentRevenue._sum.totalAmount ?? 0);
     const previous = Number(previousRevenue._sum.totalAmount ?? 0);
@@ -165,7 +168,7 @@ export class DashboardService {
 
   private async buildSalesTrend(start: Date, end: Date): Promise<Array<{ date: string; revenue: string; orders: number }>> {
     const rows = await this.prisma.order.findMany({
-      where: { status: { not: "CANCELLED" }, createdAt: { gte: start, lte: end } },
+      where: { status: { not: "CANCELLED" }, payment: { is: { status: "PAID" } }, createdAt: { gte: start, lte: end } },
       select: { createdAt: true, totalAmount: true },
       orderBy: { createdAt: "asc" },
     });
@@ -182,7 +185,7 @@ export class DashboardService {
 
   private async buildCategoryMix(start: Date, totalRevenue: number): Promise<Array<{ name: string; revenue: string; orders: number; percentage: number }>> {
     const rows = await this.prisma.orderItem.findMany({
-      where: { order: { status: { not: "CANCELLED" }, createdAt: { gte: start } } },
+      where: { order: { status: { not: "CANCELLED" }, payment: { is: { status: "PAID" } }, createdAt: { gte: start } } },
       select: { subtotal: true, orderId: true, product: { select: { category: { select: { name: true } } } } },
     });
     const grouped = new Map<string, { revenue: number; orders: Set<string> }>();
@@ -204,7 +207,7 @@ export class DashboardService {
   private async buildTopProducts(start: Date): Promise<DashboardSummary["topProducts"]> {
     const grouped = await this.prisma.orderItem.groupBy({
       by: ["productId"],
-      where: { order: { status: { not: "CANCELLED" }, createdAt: { gte: start } } },
+      where: { order: { status: { not: "CANCELLED" }, payment: { is: { status: "PAID" } }, createdAt: { gte: start } } },
       _sum: { quantity: true },
       orderBy: { _sum: { quantity: "desc" } },
       take: 8,

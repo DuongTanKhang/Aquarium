@@ -149,6 +149,7 @@ model User {
   mfaRecoveryCodes    MfaRecoveryCode[]
   mfaChallenges       MfaChallenge[]
   returnRequests      ReturnRequest[]
+  favorites           Favorite[]
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
 
@@ -267,6 +268,7 @@ model Product {
   images                ProductImage[]
   orderItems            OrderItem[]
   inventoryTransactions InventoryTransaction[]
+  favorites             Favorite[]
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
 
@@ -276,6 +278,21 @@ model Product {
   @@index([status, price])
   @@index([stockQuantity])
   @@map("products")
+}
+
+model Favorite {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  productId String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, productId])
+  @@index([userId, createdAt])
+  @@index([productId])
+  @@map("favorites")
 }
 
 model ProductImage {
@@ -427,4 +444,40 @@ model InventoryTransaction {
   @@index([productId, createdAt])
   @@index([referenceId])
   @@map("inventory_transactions")
+}
+
+model NewsletterSubscriber {
+  id             String    @id @default(uuid()) @db.Uuid
+  email          String    @unique
+  subscribedAt   DateTime  @default(now())
+  unsubscribedAt DateTime?
+  source         String    @default("storefront")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([subscribedAt])
+  @@index([unsubscribedAt])
+  @@map("newsletter_subscribers")
+}
+
+enum ContactMessageStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+  SPAM
+}
+
+model ContactMessage {
+  id        String               @id @default(uuid()) @db.Uuid
+  name      String
+  email     String
+  topic     String
+  message   String
+  status    ContactMessageStatus @default(NEW)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  @@index([status, createdAt])
+  @@index([email, createdAt])
+  @@map("contact_messages")
 }
