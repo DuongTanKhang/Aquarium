@@ -1,0 +1,24 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated build output
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+dist-seed/
+**/dist-seed/
+coverage/
+**/coverage/
+src/generated/prisma/
+**/src/generated/prisma/
+*.log
+
+# Local tooling/runtime data
+.npm-cache/
+work/
+.codex/
+.agents/
+.DS_Store
