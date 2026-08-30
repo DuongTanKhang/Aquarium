@@ -377,6 +377,10 @@ model Payment {
   status          PaymentStatus @default(UNPAID)
   amount          Decimal       @db.Decimal(12, 2)
   transactionCode String?
+  // Provider identifiers are first-class columns so webhook reconciliation
+  // remains indexed and deterministic as the payment table grows.
+  providerOrderId String?       @unique
+  providerCaptureId String?      @unique
   providerPayload Json?
   // PayPal reservations are released after this deadline when checkout is
   // abandoned. Card payments are rejected until a real hosted processor is
@@ -390,6 +394,18 @@ model Payment {
   @@index([status, createdAt])
   @@index([status, checkoutExpiresAt])
   @@map("payments")
+}
+
+model PaymentWebhookEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  provider   String
+  eventId    String   @unique
+  eventType  String
+  receivedAt DateTime @default(now())
+  payload    Json?
+
+  @@index([provider, eventType, receivedAt])
+  @@map("payment_webhook_events")
 }
 
 model ReturnRequest {

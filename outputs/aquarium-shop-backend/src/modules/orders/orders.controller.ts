@@ -10,6 +10,7 @@ import { UpdateOrderStatusDto } from "./dto/update-order-status.dto.js";
 import { CreateOrderDto } from "./dto/create-order.dto.js";
 import { LookupOrderDto } from "./dto/lookup-order.dto.js";
 import { Public } from "../auth/decorators/public.decorator.js";
+import { Throttle } from "@nestjs/throttler";
 
 @ApiTags("admin-orders")
 @ApiBearerAuth()
@@ -45,6 +46,7 @@ export class PublicOrdersController {
   @Public()
   @Roles()
   @Post("lookup")
+  @Throttle({ default: { limit: 10, ttl: 600_000 } })
   @ApiOperation({ summary: "Look up a guest order using its order number and checkout email" })
   lookup(@Body() dto: LookupOrderDto) {
     return this.orders.lookupPublic(dto);

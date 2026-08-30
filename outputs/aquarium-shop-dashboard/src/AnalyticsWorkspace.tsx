@@ -20,19 +20,27 @@ export default function AnalyticsWorkspace({ onSessionExpired, demoMode = false 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const load = async () => {
-    if (demoMode) { setData(demoAnalytics); setLowStock(demoLowStock); setLoading(false); return; }
+  const load = async (showLoading = true) => {
+    if (demoMode) { setData(demoAnalytics); setLowStock(demoLowStock); if (showLoading) setLoading(false); return; }
     if (!getAccessToken()) { onSessionExpired(); return; }
-    setLoading(true); setError("");
+    if (showLoading) setLoading(true); setError("");
     try {
       const [analytics, inventory] = await Promise.all([getDashboardAnalytics(30), listLowStockProducts({ page: 1, pageSize: 8 })]);
       setData(analytics); setLowStock(inventory.data);
     } catch (requestError) {
       setError(displayError(requestError));
       if (requestError instanceof ApiError && requestError.status === 401) { clearAccessToken(); onSessionExpired(); }
-    } finally { setLoading(false); }
+    } finally { if (showLoading) setLoading(false); }
   };
-  useEffect(() => { void load(); }, [demoMode]);
+  useEffect(() => {
+    void load(true);
+    if (demoMode) return undefined;
+    const refresh = () => { if (document.visibilityState === "visible") void load(false); };
+    const interval = window.setInterval(refresh, 30000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearInterval(interval); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [demoMode]);
 
   const maxRevenue = useMemo(() => Math.max(...(data?.salesTrend.map((point) => Number(point.revenue)) ?? [1]), 1), [data]);
   return <section className="data-workspace"><div className="data-heading"><div><span className="panel-kicker">INSIGHTS</span><h1>Analytics</h1><p>Read sales performance, category mix, and the next actions from one clear view.</p></div><button className="catalog-refresh" onClick={() => void load()} disabled={loading}><Icon name="chart" size={15} /> Refresh</button></div>

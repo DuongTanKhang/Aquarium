@@ -40,7 +40,7 @@ function money(value: string): string {
 }
 
 function dateTime(value: string): string {
-  return new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  return new Intl.DateTimeFormat("en-US", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
 export default function OrdersWorkspace({ onSessionExpired, demoMode = false }: { onSessionExpired: () => void; demoMode?: boolean }) {
@@ -67,7 +67,7 @@ export default function OrdersWorkspace({ onSessionExpired, demoMode = false }: 
 
   const clearDateFilter = () => { setDateMode("all"); setDateFrom(""); setDateTo(""); };
 
-  const load = async () => {
+  const load = async (showLoading = true) => {
     if (dateError) { setRows([]); setMeta({ page: 1, totalPages: 1, totalItems: 0 }); return; }
     const fromDate = dateMode === "all" ? undefined : dateFrom || undefined;
     const toDate = dateMode === "day" ? dateFrom || undefined : dateMode === "range" ? dateTo || undefined : undefined;
@@ -77,10 +77,10 @@ export default function OrdersWorkspace({ onSessionExpired, demoMode = false }: 
         const orderDay = order.createdAt.slice(0, 10);
         return (!fromDate || orderDay >= fromDate) && (!toDate || orderDay <= toDate);
       });
-      setRows(filtered); setMeta({ page: 1, totalPages: 1, totalItems: filtered.length }); setLoading(false); return;
+      setRows(filtered); setMeta({ page: 1, totalPages: 1, totalItems: filtered.length }); if (showLoading) setLoading(false); return;
     }
     if (!getAccessToken()) { onSessionExpired(); return; }
-    setLoading(true); setError("");
+    if (showLoading) setLoading(true); setError("");
     try {
       const result = await listAdminOrders({ page: 1, pageSize: 50, search, status, fromDate, toDate });
       setRows(result.data);
@@ -88,12 +88,17 @@ export default function OrdersWorkspace({ onSessionExpired, demoMode = false }: 
     } catch (requestError) {
       setError(displayError(requestError));
       if (requestError instanceof ApiError && requestError.status === 401) { clearAccessToken(); onSessionExpired(); }
-    } finally { setLoading(false); }
+    } finally { if (showLoading) setLoading(false); }
   };
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), search ? 220 : 0);
-    return () => window.clearTimeout(timer);
+    const timer = window.setTimeout(() => void load(true), search ? 220 : 0);
+    if (demoMode) return () => window.clearTimeout(timer);
+    const refresh = () => { if (document.visibilityState === "visible") void load(false); };
+    const interval = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearTimeout(timer); window.clearInterval(interval); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
   }, [search, status, demoMode, dateMode, dateFrom, dateTo]);
 
   const changeStatus = async (order: AdminOrder, nextStatus: string) => {

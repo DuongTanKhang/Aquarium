@@ -3,6 +3,7 @@ import { Prisma } from "../../generated/prisma/client.js";
 import { ReturnRequestStatus } from "../../generated/prisma/enums.js";
 import { PrismaService } from "../../database/prisma.service.js";
 import { EmailService } from "../auth/email.service.js";
+import { PaymentsService } from "../payments/payments.service.js";
 import { CreateReturnRequestDto } from "./dto/create-return-request.dto.js";
 import { UpdateReturnRequestDto } from "./dto/update-return-request.dto.js";
 
@@ -23,7 +24,7 @@ const transitions: Record<ReturnRequestStatus, ReturnRequestStatus[]> = {
 
 @Injectable()
 export class ReturnsService {
-  constructor(private readonly prisma: PrismaService, private readonly email: EmailService) {}
+  constructor(private readonly prisma: PrismaService, private readonly email: EmailService, private readonly payments: PaymentsService) {}
 
   async create(customerId: string, dto: CreateReturnRequestDto) {
     const order = await this.prisma.order.findFirst({ where: { id: dto.orderId, customerId }, include: { payment: true } });
@@ -52,16 +53,27 @@ export class ReturnsService {
     if (current.status !== dto.status && !transitions[current.status].includes(dto.status)) {
       throw new ConflictException(`Cannot move a ${current.status.toLowerCase()} request to ${dto.status.toLowerCase()}`);
     }
-    if (dto.status === ReturnRequestStatus.REFUNDED && !dto.providerRefundId?.trim()) {
+    let providerRefundId = dto.providerRefundId?.trim();
+    let refundStatus: string | undefined;
+    if (dto.status === ReturnRequestStatus.REFUNDED && !providerRefundId) {
+      const payment = await this.prisma.payment.findUnique({ where: { orderId: current.orderId }, select: { method: true } });
+      if (payment?.method !== "PAYPAL") {
+        throw new BadRequestException("Only PayPal refunds can be automated; provide a processor refund reference");
+      }
+      const refund = await this.payments.refundPayPalCapture(current.orderId);
+      providerRefundId = refund.refundId;
+      refundStatus = refund.status;
+    }
+    if (dto.status === ReturnRequestStatus.REFUNDED && !providerRefundId) {
       throw new BadRequestException("A provider refund reference is required before marking money as refunded");
     }
     const row = await this.prisma.$transaction(async (transaction) => {
-      const updated = await transaction.returnRequest.update({ where: { id }, data: { status: dto.status, adminNote: dto.adminNote?.trim() || undefined, resolutionNote: dto.resolutionNote?.trim() || undefined, providerRefundId: dto.providerRefundId?.trim() || undefined }, include: requestInclude });
+      const updated = await transaction.returnRequest.update({ where: { id }, data: { status: dto.status, adminNote: dto.adminNote?.trim() || undefined, resolutionNote: dto.resolutionNote?.trim() || undefined, providerRefundId: providerRefundId || undefined }, include: requestInclude });
       if (current.status !== dto.status) {
         await transaction.orderStatusHistory.create({ data: { orderId: current.orderId, status: current.order.status, note: `Return request ${id} moved to ${dto.status.toLowerCase()}${dto.adminNote ? `: ${dto.adminNote.trim()}` : ""}`, createdBy: createdBy ?? null } });
       }
       if (dto.status === ReturnRequestStatus.REFUNDED) {
-        await transaction.payment.update({ where: { orderId: current.orderId }, data: { status: "REFUNDED", providerPayload: { returnRequestId: id, providerRefundId: dto.providerRefundId?.trim(), refundedAt: new Date().toISOString() } } });
+        await transaction.payment.update({ where: { orderId: current.orderId }, data: { status: "REFUNDED", providerPayload: { returnRequestId: id, providerRefundId, providerRefundStatus: refundStatus ?? "MANUAL_CONFIRMED", refundedAt: new Date().toISOString() } } });
       }
       return updated;
     });

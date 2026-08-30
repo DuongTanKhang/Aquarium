@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { randomInt } from "node:crypto";
 import { Prisma } from "../../generated/prisma/client.js";
 import { OrderStatus } from "../../generated/prisma/enums.js";
 import { PrismaService } from "../../database/prisma.service.js";
@@ -380,6 +381,31 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     return true;
   }
 
+  private async restoreOrderInventory(
+    transaction: Prisma.TransactionClient,
+    order: { id: string; orderNumber: string; items: Array<{ productId: string; quantity: number }> },
+    reason: string,
+  ): Promise<void> {
+    for (const item of order.items) {
+      const updated = await transaction.product.update({
+        where: { id: item.productId },
+        data: { stockQuantity: { increment: item.quantity } },
+        select: { stockQuantity: true },
+      });
+      await transaction.inventoryTransaction.create({
+        data: {
+          productId: item.productId,
+          type: "RETURN",
+          quantity: item.quantity,
+          stockBefore: updated.stockQuantity - item.quantity,
+          stockAfter: updated.stockQuantity,
+          referenceId: order.id,
+          note: `${reason} (${order.orderNumber})`,
+        },
+      });
+    }
+  }
+
   private reservationTtlSeconds(): number {
     return this.config.get<number>("PAYMENT_RESERVATION_TTL_SECONDS", 10_800);
   }
@@ -409,7 +435,9 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
 
   private async nextOrderNumber(transaction: Prisma.TransactionClient): Promise<string> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
+      // Keep the readable timestamp prefix, but use cryptographic randomness
+      // for the public suffix so order lookup IDs are not enumerable.
+      const suffix = randomInt(0, 36 ** 6).toString(36).padStart(6, "0").toUpperCase();
       const candidate = `AQ-${Date.now().toString(36).toUpperCase()}-${suffix}`;
       const exists = await transaction.order.findUnique({ where: { orderNumber: candidate }, select: { id: true } });
       if (!exists) return candidate;
@@ -469,6 +497,31 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       }
       if (dto.status === OrderStatus.CANCELLED && current.payment?.method === "PAYPAL" && current.payment.status === "PENDING") {
         await this.releasePendingReservation(transaction, current, dto.note?.trim() || "Order cancelled by admin");
+      }
+      // COD orders reserve inventory at checkout too. Release that
+      // reservation exactly once when an administrator cancels the order.
+      // PayPal pending orders use the payment-claiming path above; paid orders
+      // must go through the refund workflow before cancellation is allowed.
+      if (dto.status === OrderStatus.CANCELLED && current.status !== OrderStatus.CANCELLED && cashOnDelivery) {
+        const reason = dto.note?.trim() || "Cash-on-delivery order cancelled";
+        const claimed = current.payment
+          ? await transaction.payment.updateMany({
+            where: { orderId: current.id, status: { in: ["UNPAID", "PENDING"] } },
+            data: {
+              status: "FAILED",
+              providerPayload: {
+                ...(current.payment.providerPayload && typeof current.payment.providerPayload === "object" && !Array.isArray(current.payment.providerPayload)
+                  ? current.payment.providerPayload as Record<string, unknown>
+                  : {}),
+                cancelledAt: new Date().toISOString(),
+                reason,
+              },
+            },
+          })
+          : { count: 1 };
+        // The conditional payment update is the cancellation claim. If two
+        // admin requests race, only the winner restores the reserved stock.
+        if (claimed.count === 1) await this.restoreOrderInventory(transaction, current, reason);
       }
       const updated = await transaction.order.update({ where: { id }, data: { status: dto.status }, include: orderInclude });
       if (current.status !== dto.status || dto.note) {

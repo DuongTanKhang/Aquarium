@@ -11,7 +11,7 @@ function displayError(error: unknown): string {
 }
 
 function money(value: string): string { return `$${Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
-function date(value: string | null): string { return value ? new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(value)) : "—"; }
+function date(value: string | null): string { return value ? new Intl.DateTimeFormat("en-US", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value)) : "—"; }
 function initials(name: string): string { return name.trim().split(/\s+/).slice(-2).map((word) => word[0]).join("").toUpperCase() || "CU"; }
 
 const demoCustomers: Customer[] = [

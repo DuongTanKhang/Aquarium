@@ -325,11 +325,11 @@ async function getSummary(): Promise<{ value: Summary | null; unauthorized: bool
     return { value: {
       revenue: compactRevenue,
       revenueChange: `${data.revenueChange >= 0 ? "+" : ""}${data.revenueChange}%`,
-      orders: data.orders.toLocaleString("vi-VN"),
+      orders: data.orders.toLocaleString("en-US"),
       ordersChange: "live API",
-      customers: data.customers.toLocaleString("vi-VN"),
+      customers: data.customers.toLocaleString("en-US"),
       customersChange: "live API",
-      lowStock: data.lowStockProducts.toLocaleString("vi-VN"),
+      lowStock: data.lowStockProducts.toLocaleString("en-US"),
       live: data,
     }, unauthorized: false };
   } catch (error) {

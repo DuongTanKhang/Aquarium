@@ -76,7 +76,7 @@ export default function CategoryWorkspace({ onSessionExpired, demoMode = false }
     }
   }, [demoMode, demoCategories]);
 
-  const loadCategories = async () => {
+  const loadCategories = async (showLoading = true) => {
     if (demoMode) {
       const query = search.trim().toLowerCase();
       setCategories(demoCategories.filter((category) => !query || [category.name, category.slug].some((value) => value.toLowerCase().includes(query))));
@@ -87,7 +87,7 @@ export default function CategoryWorkspace({ onSessionExpired, demoMode = false }
       onSessionExpired();
       return;
     }
-    setLoading(true);
+    if (showLoading) setLoading(true);
     setError("");
     try {
       const result = await listManageCategories(search);
@@ -99,13 +99,26 @@ export default function CategoryWorkspace({ onSessionExpired, demoMode = false }
         onSessionExpired();
       }
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => void loadCategories(), search ? 220 : 0);
-    return () => window.clearTimeout(timeout);
+    const timeout = window.setTimeout(() => void loadCategories(true), search ? 220 : 0);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadCategories(false);
+    }, 15_000);
+    const refreshOnReturn = () => {
+      if (document.visibilityState === "visible") void loadCategories(false);
+    };
+    window.addEventListener("focus", refreshOnReturn);
+    document.addEventListener("visibilitychange", refreshOnReturn);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshOnReturn);
+      document.removeEventListener("visibilitychange", refreshOnReturn);
+    };
   }, [search, demoMode, demoCategories]);
 
   const openCreate = () => {

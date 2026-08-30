@@ -549,6 +549,23 @@ textarea:focus-visible,
 .orders-lookup-form label, .account-edit-form label { display: grid; gap: 7px; color: #6c8177; font-size: 9px; font-weight: 800; }
 .orders-lookup-form input, .account-edit-form input { width: 100%; height: 42px; outline: 0; padding: 0 12px; color: #2c5147; border: 1px solid #d9ded6; border-radius: 1px; background: rgba(255,255,255,.52); font: 500 11px "DM Sans", sans-serif; }
 .orders-lookup-form input:focus, .account-edit-form input:focus { border-color: #7fa197; background: white; box-shadow: 0 0 0 3px rgba(44,98,88,.09); }
+.orders-lookup-form select, .orders-lookup-form textarea { width: 100%; outline: 0; color: #2c5147; border: 1px solid #d9ded6; border-radius: 2px; background-color: rgba(255,255,255,.68); font: 500 11px "DM Sans", sans-serif; transition: border-color .18s ease, box-shadow .18s ease, background .18s ease, transform .18s ease; }
+.orders-lookup-form select { height: 42px; padding: 0 34px 0 12px; appearance: none; color-scheme: light; cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236c8177' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 11px center; background-size: 15px; }
+.orders-lookup-form textarea { min-height: 82px; padding: 11px 12px; resize: vertical; line-height: 1.5; }
+.orders-lookup-form select:hover, .orders-lookup-form textarea:hover { border-color: #b6c9bd; background-color: rgba(255,255,255,.86); }
+.orders-lookup-form select:focus, .orders-lookup-form textarea:focus { border-color: #7fa197; background: white; box-shadow: 0 0 0 3px rgba(44,98,88,.09); }
+.orders-lookup-form select option { color: #2c5147; background: #faf9f5; }
+.orders-lookup-form textarea::placeholder { color: #a5b0a9; }
+.customer-returns-panel { align-items: center; border-color: #d7ded7; background: linear-gradient(135deg, rgba(250,249,245,.9), rgba(244,247,239,.72)); box-shadow: 0 17px 38px rgba(47,81,69,.07); }
+.customer-returns-panel > div:first-child { align-self: center; padding: 4px 0; }
+.customer-returns-panel .orders-lookup-form { align-self: stretch; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 12px; }
+.customer-returns-panel .orders-lookup-form .checkout-field-wide { grid-column: 1 / -1; }
+.customer-returns-panel .orders-lookup-form > .store-primary-button { width: min(100%, 260px); min-height: 44px; border-radius: 2px; letter-spacing: .01em; }
+.customer-returns-panel .orders-lookup-error { margin: -3px 0 0; }
+.customer-return-history { grid-column: 1 / -1; display: grid; gap: 8px; margin-top: 6px; padding-top: 15px; border-top: 1px solid #e2e5dc; color: #75877e; font-size: 9px; }
+.customer-return-history > strong { color: #2c5147; font-size: 10px; letter-spacing: .04em; }
+.customer-return-history > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; color: #6f8178; border: 1px solid #e1e5dc; background: rgba(255,255,255,.42); }
+.customer-return-history b { color: #2c6258; font-size: 9px; }
 .orders-lookup-form button { min-height: 42px; white-space: nowrap; }
 .orders-lookup-error { grid-column: 2 / -1; color: #9a655d !important; font-size: 9px !important; }
 .orders-list-section { margin-top: 47px; }
@@ -776,7 +793,8 @@ select { color-scheme: light; }
 .product-stock small { color: #9eacd0; }
 
 /* Custom glass dropdowns avoid the browser's opaque native option menu. */
-.glass-select { position: relative; min-width: 0; }
+.glass-select { position: relative; min-width: 0; z-index: 1; }
+.glass-select-open { z-index: 120; }
 .product-filters .glass-select { height: 40px; }
 .modal-fields .glass-select { height: 38px; }
 .glass-select-trigger { width: 100%; height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 0 11px; color: #dce5f7; border: 1px solid rgba(255,255,255,.14); border-radius: 11px; outline: 0; background: rgba(5,13,43,.34); font-family: "DM Sans", Inter, system-ui, sans-serif; font-size: 10px; text-align: left; }
@@ -785,6 +803,7 @@ select { color-scheme: light; }
 .glass-select-chevron { width: 7px; height: 7px; flex: 0 0 7px; margin: -4px 2px 0 8px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); transition: transform .18s ease, margin .18s ease; }
 .glass-select-open .glass-select-chevron { margin-top: 4px; transform: rotate(225deg); }
 .glass-select-menu { width: 100%; box-sizing: border-box; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; display: flex; flex-direction: column; gap: 3px; max-height: 230px; overflow-y: auto; padding: 6px; border: 1px solid rgba(255,255,255,.2); border-radius: 12px; background: linear-gradient(145deg, rgba(31,49,112,.96), rgba(7,18,56,.96)); box-shadow: 0 18px 40px rgba(0,0,0,.4), inset 0 1px rgba(255,255,255,.1); backdrop-filter: blur(24px) saturate(145%); animation: glass-menu-in .16s ease-out; }
+.glass-select-open .glass-select-menu { z-index: 200; }
 .glass-select-option { width: 100%; height: 31px; min-height: 31px; flex: 0 0 31px; display: flex; align-items: center; box-sizing: border-box; padding: 0 9px; color: #c4d0e9; border-radius: 8px; background: transparent; font-family: "DM Sans", Inter, system-ui, sans-serif; font-size: 10px; line-height: 1.2; text-align: left; }
 .glass-select-option:hover, .glass-select-option-active { color: white; background: var(--accent-soft); }
 @keyframes glass-menu-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
@@ -1028,6 +1047,13 @@ select { color-scheme: light; }
 @media (max-width: 900px) {
   .data-card:has(.orders-admin-table) .data-table-wrap { overflow-x: auto; overflow-y: visible; }
 }
+/* Every status table uses the same escaping menu treatment. Returns used to
+   inherit the card's overflow clipping, so its menu rendered underneath the
+   next row and looked like the control was broken. */
+.data-card:has(.status-select) { overflow: visible; }
+.data-card:has(.status-select) .data-table-wrap { overflow: visible; }
+.data-card:has(.status-select) .data-table tbody tr:has(.glass-select-open) { position: relative; z-index: 100; }
+.data-card:has(.status-select) .data-table tbody td:has(.glass-select-open) { position: relative; z-index: 101; }
 /* Card checkout icon uses the same glass treatment as the PayPal icon. */
 .payment-card { color: #a8b8ff; background: rgba(99,102,241,.22); }
 

@@ -162,7 +162,7 @@ function slugify(value: string): string {
 }
 
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("vi-VN", {
+  return new Intl.DateTimeFormat("en-US", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
@@ -238,7 +238,7 @@ export default function ProductWorkspace({ onSessionExpired, demoMode = false }:
       // Demo editing continues for the current tab when storage is unavailable.
     }
   }, [demoMode, demoCatalog]);
-  const loadCatalog = async () => {
+  const loadCatalog = async (showLoading = true) => {
     if (demoMode) {
       setLoading(true);
       const query = filters.search.trim().toLowerCase();
@@ -263,7 +263,7 @@ export default function ProductWorkspace({ onSessionExpired, demoMode = false }:
       return;
     }
 
-    setLoading(true);
+    if (showLoading) setLoading(true);
     setError("");
     try {
       const [productPage, categoryPage] = await Promise.all([
@@ -280,12 +280,25 @@ export default function ProductWorkspace({ onSessionExpired, demoMode = false }:
         onSessionExpired();
       }
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
   useEffect(() => {
-    void loadCatalog();
+    void loadCatalog(true);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadCatalog(false);
+    }, 15_000);
+    const refreshOnReturn = () => {
+      if (document.visibilityState === "visible") void loadCatalog(false);
+    };
+    window.addEventListener("focus", refreshOnReturn);
+    document.addEventListener("visibilitychange", refreshOnReturn);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshOnReturn);
+      document.removeEventListener("visibilitychange", refreshOnReturn);
+    };
   }, [filters.page, filters.pageSize, filters.search, filters.status, filters.categoryId, filters.type, demoMode, demoCatalog, demoCategoryList]);
 
   const openCreate = () => {
@@ -513,7 +526,7 @@ function ProductFormModal({ editingProduct, form, saving, categories, onChange, 
           <label>Category<GlassSelect value={form.categoryId} onChange={(value) => field("categoryId", value)} ariaLabel="Category" options={[{ value: "", label: "Choose category" }, ...categories.map((category) => ({ value: category.id, label: category.name }))]} /></label>
           <label>Type<GlassSelect value={form.type} onChange={(value) => field("type", value)} ariaLabel="Type" options={Object.entries(typeLabels).map(([value, label]) => ({ value, label }))} /></label>
           <label>Price (USD)<input inputMode="decimal" value={form.price} onChange={(event) => field("price", event.target.value)} placeholder="14.00" required /></label>
-          <label>Cost price<input inputMode="decimal" value={form.costPrice ?? ""} onChange={(event) => field("costPrice", event.target.value)} placeholder="18000.00" /></label>
+          <label>Cost price (USD)<input inputMode="decimal" value={form.costPrice ?? ""} onChange={(event) => field("costPrice", event.target.value)} placeholder="8.00" /></label>
           <label>Status<GlassSelect value={form.status} onChange={(value) => field("status", value)} ariaLabel="Status" options={Object.entries(statusLabels).map(([value, label]) => ({ value, label }))} /></label>
           <label>{editingProduct ? "Current stock" : "Opening stock"}<input type="number" min="0" value={form.stockQuantity ?? 0} onChange={(event) => field("stockQuantity", Number(event.target.value))} /></label>
           <div className="field-wide product-image-field"><span className="product-image-field-label">Product images</span>

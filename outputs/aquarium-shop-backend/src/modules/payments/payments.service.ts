@@ -47,6 +47,11 @@ export interface PayPalCheckoutCaptureResponse {
   status: "COMPLETED" | "PENDING";
 }
 
+export interface PayPalRefundResponse {
+  refundId: string;
+  status: string;
+}
+
 interface StoredProviderConnections {
   paypalPending?: {
     trackingId: string;
@@ -219,10 +224,11 @@ export class PaymentsService {
   async createPayPalCheckout(dto: CreateOrderDto, customerId: string, idempotencyKey?: string): Promise<PayPalCheckoutStartResponse> {
     const configured = this.getPayPalCheckoutConfig();
     const order = await this.orders.createPublic({ ...dto, paymentMethod: "PAYPAL" }, customerId, idempotencyKey);
-    const existingPayment = await this.prisma.payment.findUnique({ where: { orderId: order.id }, select: { status: true, providerPayload: true } });
+    const existingPayment = await this.prisma.payment.findUnique({ where: { orderId: order.id }, select: { status: true, providerOrderId: true, providerPayload: true } });
     const existingProvider = this.readPayPalPayload(existingPayment?.providerPayload);
-    if (existingPayment?.status === "PENDING" && existingProvider?.paypalOrderId && existingProvider.approvalUrl) {
-      return { order, paypalOrderId: existingProvider.paypalOrderId, approvalUrl: existingProvider.approvalUrl, expiresIn: 10_800 };
+    const existingPayPalOrderId = existingPayment?.providerOrderId ?? existingProvider?.paypalOrderId;
+    if (existingPayment?.status === "PENDING" && existingPayPalOrderId && existingProvider?.approvalUrl) {
+      return { order, paypalOrderId: existingPayPalOrderId, approvalUrl: existingProvider.approvalUrl, expiresIn: 10_800 };
     }
     try {
       const accessToken = await this.getPayPalAccessToken(configured.apiBase, configured.clientId, configured.clientSecret);
@@ -264,7 +270,7 @@ export class PaymentsService {
       }
       const payload: PayPalPaymentPayload = { paypalOrderId, approvalUrl, amount, currencyCode: "USD", status: "CREATED", createdAt: new Date().toISOString() };
       const reservationTtl = this.config.get<number>("PAYMENT_RESERVATION_TTL_SECONDS", 10_800);
-      await this.prisma.payment.update({ where: { orderId: order.id }, data: { providerPayload: payload as Prisma.InputJsonValue, checkoutExpiresAt: new Date(Date.now() + reservationTtl * 1000) } });
+      await this.prisma.payment.update({ where: { orderId: order.id }, data: { providerOrderId: paypalOrderId, providerPayload: payload as Prisma.InputJsonValue, checkoutExpiresAt: new Date(Date.now() + reservationTtl * 1000) } });
       return { order, paypalOrderId, approvalUrl, expiresIn: 10_800 };
     } catch (error) {
       await this.orders.failPendingPayment(order.id, customerId, "PayPal checkout could not be created");
@@ -314,8 +320,8 @@ export class PaymentsService {
       const approvalUrl = this.getPayPalApprovalUrl(data.links);
       if (!paypalOrderId || !approvalUrl || data.status !== "CREATED") throw new ServiceUnavailableException("PayPal returned an invalid checkout session");
       const payload: PayPalPaymentPayload = { paypalOrderId, approvalUrl, amount, currencyCode: "USD", status: "CREATED", createdAt: new Date().toISOString() };
-      const reservationTtl = this.config.get<number>("PAYMENT_RESERVATION_TTL_SECONDS", 10_800);
-      const updated = await this.prisma.payment.updateMany({ where: { orderId: order.id, status: "PENDING" }, data: { providerPayload: payload as Prisma.InputJsonValue, checkoutExpiresAt: new Date(Date.now() + reservationTtl * 1000) } });
+       const reservationTtl = this.config.get<number>("PAYMENT_RESERVATION_TTL_SECONDS", 10_800);
+       const updated = await this.prisma.payment.updateMany({ where: { orderId: order.id, status: "PENDING" }, data: { providerOrderId: paypalOrderId, providerPayload: payload as Prisma.InputJsonValue, checkoutExpiresAt: new Date(Date.now() + reservationTtl * 1000) } });
       if (updated.count !== 1) throw new BadRequestException("This PayPal checkout is no longer payable");
       return { order: await this.orders.getById(order.id), paypalOrderId, approvalUrl, expiresIn: reservationTtl };
     } catch (error) {
@@ -340,11 +346,12 @@ export class PaymentsService {
     if (current.payment.method !== "PAYPAL") throw new BadRequestException("This order is not a PayPal checkout");
     if (current.payment.status === "PAID") return { order: await this.orders.getById(orderId), captureId: current.payment.transactionCode, status: "COMPLETED" };
     if (current.payment.status !== "PENDING") throw new BadRequestException("This PayPal checkout is no longer payable");
-    const provider = this.readPayPalPayload(current.payment.providerPayload);
-    if (!provider?.paypalOrderId) throw new BadRequestException("PayPal checkout session is missing");
+    const provider = this.readPayPalPayload(current.payment.providerPayload) ?? {};
+    const paypalOrderId = current.payment.providerOrderId ?? provider.paypalOrderId;
+    if (!paypalOrderId) throw new BadRequestException("PayPal checkout session is missing");
 
     const accessToken = await this.getPayPalAccessToken(configured.apiBase, configured.clientId, configured.clientSecret);
-    const response = await this.fetchWithTimeout(`${configured.apiBase}/v2/checkout/orders/${encodeURIComponent(provider.paypalOrderId)}/capture`, {
+    const response = await this.fetchWithTimeout(`${configured.apiBase}/v2/checkout/orders/${encodeURIComponent(paypalOrderId)}/capture`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -376,9 +383,9 @@ export class PaymentsService {
       throw new BadRequestException("The PayPal amount did not match this order");
     }
     const captureId = capture?.id ?? null;
-    const nextPayload: PayPalPaymentPayload = { ...provider, status, captureId: captureId ?? provider.captureId, capturedAt: new Date().toISOString() };
+    const nextPayload: PayPalPaymentPayload = { ...provider, paypalOrderId, status, captureId: captureId ?? provider.captureId, capturedAt: new Date().toISOString() };
     if (status === "PENDING") {
-      await this.prisma.payment.update({ where: { orderId }, data: { providerPayload: nextPayload as Prisma.InputJsonValue } });
+      await this.prisma.payment.update({ where: { orderId }, data: { providerOrderId: paypalOrderId, providerCaptureId: captureId, providerPayload: nextPayload as Prisma.InputJsonValue } });
       return { order: await this.orders.getById(orderId), captureId, status };
     }
 
@@ -386,7 +393,7 @@ export class PaymentsService {
       const payment = await transaction.payment.findUnique({ where: { orderId }, select: { status: true } });
       if (!payment) throw new BadRequestException("Payment record not found");
       if (payment.status === "PAID") return transaction.order.findUniqueOrThrow({ where: { id: orderId }, include: { payment: true, items: true, customer: { select: { id: true, email: true, fullName: true } }, statusHistory: { orderBy: { createdAt: "asc" } } } });
-      await transaction.payment.update({ where: { orderId }, data: { status: "PAID", transactionCode: captureId, paidAt: new Date(), checkoutExpiresAt: null, providerPayload: nextPayload as Prisma.InputJsonValue } });
+      await transaction.payment.update({ where: { orderId }, data: { status: "PAID", transactionCode: captureId, providerOrderId: paypalOrderId, providerCaptureId: captureId, paidAt: new Date(), checkoutExpiresAt: null, providerPayload: nextPayload as Prisma.InputJsonValue } });
       await transaction.order.update({ where: { id: orderId }, data: { status: OrderStatus.CONFIRMED } });
       await transaction.orderStatusHistory.create({ data: { orderId, status: OrderStatus.CONFIRMED, note: "PayPal payment captured" } });
       return transaction.order.findUniqueOrThrow({ where: { id: orderId }, include: { payment: true, items: true, customer: { select: { id: true, email: true, fullName: true } }, statusHistory: { orderBy: { createdAt: "asc" } } } });
@@ -397,6 +404,51 @@ export class PaymentsService {
 
   async cancelPayPalCheckout(orderId: string, customerId: string): Promise<OrderResponse> {
     return this.orders.failPendingPayment(orderId, customerId, "PayPal checkout was cancelled");
+  }
+
+  /**
+   * Issue a server-side full refund for a captured PayPal payment. The
+   * deterministic request ID makes retries safe if the browser or worker
+   * loses the response after PayPal accepted the refund.
+   */
+  async refundPayPalCapture(orderId: string): Promise<PayPalRefundResponse> {
+    const configured = this.getPayPalCheckoutConfig();
+    const current = await this.prisma.order.findUnique({ where: { id: orderId }, include: { payment: true } });
+    if (!current?.payment || current.payment.method !== "PAYPAL") {
+      throw new BadRequestException("This order does not have a PayPal payment");
+    }
+    if (current.payment.status !== "PAID") {
+      throw new BadRequestException("A captured PayPal payment is required before refunding");
+    }
+    const provider = this.readPayPalPayload(current.payment.providerPayload) ?? {};
+    const captureId = current.payment.providerCaptureId ?? provider.captureId ?? current.payment.transactionCode;
+    if (!captureId) throw new BadRequestException("PayPal capture reference is missing");
+
+    const accessToken = await this.getPayPalAccessToken(configured.apiBase, configured.clientId, configured.clientSecret);
+    const response = await this.fetchWithTimeout(`${configured.apiBase}/v2/payments/captures/${encodeURIComponent(captureId)}/refund`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+        "PayPal-Request-ID": `aquarium-refund-${orderId}`,
+        ...(this.config.get<string | undefined>("PAYPAL_PARTNER_ATTRIBUTION_ID") ? { "PayPal-Partner-Attribution-Id": this.config.get<string>("PAYPAL_PARTNER_ATTRIBUTION_ID") } : {}),
+      },
+      body: JSON.stringify({}),
+    });
+    const data = await this.readJson(response);
+    if (!response.ok) {
+      if (response.status === 422 && this.payPalIssue(data) === "INSTRUMENT_DECLINED") {
+        throw new BadRequestException("PayPal could not process this refund yet");
+      }
+      throw new ServiceUnavailableException("PayPal could not process the refund");
+    }
+    const refundId = typeof data.id === "string" ? data.id : "";
+    const status = typeof data.status === "string" ? data.status : "";
+    if (!refundId || !["COMPLETED", "PENDING"].includes(status)) {
+      throw new ServiceUnavailableException("PayPal returned an invalid refund response");
+    }
+    return { refundId, status };
   }
 
   /** Verify PayPal's signed notification before touching order state. */
@@ -427,12 +479,36 @@ export class PaymentsService {
     if (!["PAYMENT.CAPTURE.COMPLETED", "PAYMENT.CAPTURE.DENIED", "PAYMENT.CAPTURE.REFUNDED", "PAYMENT.CAPTURE.REVERSED", "CHECKOUT.PAYMENT-APPROVAL.REVERSED"].includes(eventType)) {
       return { received: true };
     }
+    const eventId = typeof body.id === "string" ? body.id : "";
+    if (!eventId) throw new BadRequestException("PayPal webhook event id is missing");
+    try {
+      await this.prisma.paymentWebhookEvent.create({
+        data: {
+          provider: "PAYPAL",
+          eventId,
+          eventType,
+          payload: body as unknown as Prisma.InputJsonValue,
+        },
+      });
+    } catch (error: unknown) {
+      // PayPal retries events until acknowledged. A unique event record turns
+      // those retries into harmless no-ops instead of duplicate transitions.
+      // If a previous worker crashed after recording the event but before
+      // updating the payment, continue processing it; the payment transaction
+      // below is itself guarded by the current status.
+      if ((error as { code?: unknown }).code !== "P2002") throw error;
+    }
     const resource = body.resource && typeof body.resource === "object" && !Array.isArray(body.resource) ? body.resource as Record<string, unknown> : {};
     const related = resource.supplementary_data && typeof resource.supplementary_data === "object" && !Array.isArray(resource.supplementary_data) ? (resource.supplementary_data as Record<string, unknown>).related_ids : null;
     const paypalOrderId = related && typeof related === "object" && !Array.isArray(related) && typeof (related as Record<string, unknown>).order_id === "string" ? (related as Record<string, unknown>).order_id as string : null;
     const captureId = typeof resource.id === "string" ? resource.id : null;
-    const candidates = await this.prisma.payment.findMany({ where: { method: "PAYPAL", status: { in: ["PENDING", "PAID"] } }, include: { order: true }, take: 200 });
-    const match = candidates.find((payment) => this.readPayPalPayload(payment.providerPayload)?.paypalOrderId === paypalOrderId || (captureId && payment.transactionCode === captureId));
+    const identifiers = [
+      ...(paypalOrderId ? [{ providerOrderId: paypalOrderId }] : []),
+      ...(captureId ? [{ providerCaptureId: captureId }, { transactionCode: captureId }] : []),
+    ];
+    const match = identifiers.length
+      ? await this.prisma.payment.findFirst({ where: { method: "PAYPAL", status: { in: ["PENDING", "PAID"] }, OR: identifiers }, include: { order: true } })
+      : null;
     if (!match) return { received: true };
     if (eventType === "PAYMENT.CAPTURE.COMPLETED") {
       const amount = resource.amount && typeof resource.amount === "object" && !Array.isArray(resource.amount) ? resource.amount as Record<string, unknown> : {};
@@ -441,7 +517,7 @@ export class PaymentsService {
       await this.prisma.$transaction(async (transaction) => {
         const payment = await transaction.payment.findUnique({ where: { orderId: match.orderId }, select: { status: true } });
         if (!payment || payment.status === "PAID") return;
-        await transaction.payment.update({ where: { orderId: match.orderId }, data: { status: "PAID", transactionCode: captureId, paidAt: new Date(), providerPayload: { ...provider, status: "COMPLETED", captureId, capturedAt: new Date().toISOString() } } });
+        await transaction.payment.update({ where: { orderId: match.orderId }, data: { status: "PAID", transactionCode: captureId, providerOrderId: paypalOrderId, providerCaptureId: captureId, paidAt: new Date(), providerPayload: { ...provider, paypalOrderId: paypalOrderId ?? provider.paypalOrderId, status: "COMPLETED", captureId, capturedAt: new Date().toISOString() } } });
         await transaction.order.update({ where: { id: match.orderId }, data: { status: OrderStatus.CONFIRMED } });
         await transaction.orderStatusHistory.create({ data: { orderId: match.orderId, status: OrderStatus.CONFIRMED, note: "PayPal webhook confirmed payment" } });
       });
@@ -449,7 +525,7 @@ export class PaymentsService {
     } else if (eventType === "PAYMENT.CAPTURE.REFUNDED" || eventType === "PAYMENT.CAPTURE.REVERSED") {
       if (match.status === "PAID") {
         const provider = this.readPayPalPayload(match.providerPayload) ?? {};
-        await this.prisma.payment.update({ where: { orderId: match.orderId }, data: { status: "REFUNDED", providerPayload: { ...provider, status: "REFUNDED", capturedAt: new Date().toISOString() } } });
+        await this.prisma.payment.update({ where: { orderId: match.orderId }, data: { status: "REFUNDED", providerCaptureId: captureId ?? match.providerCaptureId, providerPayload: { ...provider, status: "REFUNDED", captureId: captureId ?? provider.captureId, capturedAt: new Date().toISOString() } } });
       }
     } else if (eventType === "PAYMENT.CAPTURE.DENIED" || eventType === "CHECKOUT.PAYMENT-APPROVAL.REVERSED") {
       if (match.order.customerId) await this.orders.failPendingPayment(match.orderId, match.order.customerId, "PayPal reported that the payment was not completed");

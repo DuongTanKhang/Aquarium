@@ -37,10 +37,10 @@ export default function PaymentWorkspace({ onSessionExpired, demoMode = false }:
     window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
   }, []);
 
-  const load = async () => {
-    if (demoMode) { setSettings(null); setConnections(null); setLoading(false); return; }
+  const load = async (showLoading = true) => {
+    if (demoMode) { setSettings(null); setConnections(null); if (showLoading) setLoading(false); return; }
     if (!getAccessToken()) { onSessionExpired(); return; }
-    setLoading(true); setError("");
+    if (showLoading) setLoading(true); setError("");
     try {
       const [paymentSettings, paymentConnections] = await Promise.all([getPaymentSettings(), getPaymentConnections()]);
       const methods = paymentSettings.methods.filter((method) => method.id === "CARD" || method.id === "PAYPAL" || method.id === "COD");
@@ -51,9 +51,17 @@ export default function PaymentWorkspace({ onSessionExpired, demoMode = false }:
       setConnections(paymentConnections);
     }
     catch (requestError) { setError(displayError(requestError)); if (requestError instanceof ApiError && requestError.status === 401) { clearAccessToken(); onSessionExpired(); } }
-    finally { setLoading(false); }
+    finally { if (showLoading) setLoading(false); }
   };
-  useEffect(() => { void load(); }, [demoMode]);
+  useEffect(() => {
+    void load(true);
+    if (demoMode) return undefined;
+    const refresh = () => { if (document.visibilityState === "visible") void load(false); };
+    const interval = window.setInterval(refresh, 30000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearInterval(interval); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [demoMode]);
 
   const toggle = (id: PaymentMethodId) => setSettings((current) => current ? { ...current, methods: current.methods.map((method) => method.id === id ? { ...method, enabled: !method.enabled } : method) } : current);
   const openProviderSetup = async () => {

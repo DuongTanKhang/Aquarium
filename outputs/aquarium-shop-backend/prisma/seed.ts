@@ -55,11 +55,11 @@ async function main(): Promise<void> {
   }
 
   const categories = [
-    { name: "Cá cảnh", slug: "ca-canh" },
-    { name: "Bể cá", slug: "be-ca" },
-    { name: "Thức ăn", slug: "thuc-an" },
-    { name: "Phụ kiện", slug: "phu-kien" },
-    { name: "Cây thủy sinh", slug: "cay-thuy-sinh" },
+    { name: "Tropical fish", slug: "ca-canh" },
+    { name: "Aquariums", slug: "be-ca" },
+    { name: "Fish food", slug: "thuc-an" },
+    { name: "Accessories", slug: "phu-kien" },
+    { name: "Aquatic plants", slug: "cay-thuy-sinh" },
   ];
 
   for (const category of categories) {
