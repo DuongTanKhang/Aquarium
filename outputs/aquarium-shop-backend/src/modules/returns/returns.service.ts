@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "../../generated/prisma/client.js";
-import { ReturnRequestStatus, ReturnRequestType } from "../../generated/prisma/enums.js";
+import { ReturnRequestStatus } from "../../generated/prisma/enums.js";
 import { PrismaService } from "../../database/prisma.service.js";
 import { EmailService } from "../auth/email.service.js";
 import { CreateReturnRequestDto } from "./dto/create-return-request.dto.js";
@@ -61,7 +61,7 @@ export class ReturnsService {
         await transaction.orderStatusHistory.create({ data: { orderId: current.orderId, status: current.order.status, note: `Return request ${id} moved to ${dto.status.toLowerCase()}${dto.adminNote ? `: ${dto.adminNote.trim()}` : ""}`, createdBy: createdBy ?? null } });
       }
       if (dto.status === ReturnRequestStatus.REFUNDED) {
-        await transaction.payment.update({ where: { orderId: current.orderId }, data: { status: "REFUNDED", providerPayload: { returnRequestId: id, providerRefundId: dto.providerRefundId?.trim(), refundedAt: new Date().toISOString() } as Prisma.InputJsonValue } });
+        await transaction.payment.update({ where: { orderId: current.orderId }, data: { status: "REFUNDED", providerPayload: { returnRequestId: id, providerRefundId: dto.providerRefundId?.trim(), refundedAt: new Date().toISOString() } } });
       }
       return updated;
     });

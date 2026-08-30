@@ -13,6 +13,10 @@ interface SavedOrderRef {
 
 const STORAGE_KEY = "aquarium-store-order-refs";
 const ORDER_STEPS = ["PENDING", "CONFIRMED", "PREPARING", "SHIPPING", "COMPLETED"];
+// Keep customer tracking fresh without requiring a page reload. The orders
+// screen is only mounted while it is open, so this stays well below the API
+// rate limit while still reflecting admin fulfillment changes quickly.
+const ORDER_REFRESH_MS = 5_000;
 
 function readSavedRefs(): SavedOrderRef[] {
   try {
@@ -68,42 +72,46 @@ export default function CustomerOrdersPage({ customer = null, onBack }: Customer
 
   useEffect(() => {
     let active = true;
+    let requestId = 0;
     const load = async (showLoading: boolean) => {
+      const currentRequest = ++requestId;
       if (showLoading) setLoading(true);
       try {
         if (customer) {
           const mine = await listMyOrders();
-          if (!active) return;
+          if (!active || currentRequest !== requestId) return;
           setOrders(mine);
           setError("");
           if (mine.length) setExpandedOrder((current) => current || mine[0].id);
         } else if (savedRefs.length) {
           const results = await Promise.allSettled(savedRefs.map((ref) => lookupPublicOrder(ref.email, ref.orderNumber)));
-          if (!active) return;
+          if (!active || currentRequest !== requestId) return;
           setOrders(results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []));
         } else {
           setOrders([]);
         }
       } catch (requestError: unknown) {
-        if (!active) return;
+        if (!active || currentRequest !== requestId) return;
         setError(requestError instanceof ApiError ? requestError.message : "We could not load your orders right now.");
       } finally {
-        if (active) setLoading(false);
+        if (active && currentRequest === requestId) setLoading(false);
       }
     };
     void load(true);
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") void load(false);
-    }, 15_000);
+    }, ORDER_REFRESH_MS);
     const refreshOnReturn = () => {
       if (document.visibilityState === "visible") void load(false);
     };
     window.addEventListener("focus", refreshOnReturn);
+    window.addEventListener("online", refreshOnReturn);
     document.addEventListener("visibilitychange", refreshOnReturn);
     return () => {
       active = false;
       window.clearInterval(interval);
       window.removeEventListener("focus", refreshOnReturn);
+      window.removeEventListener("online", refreshOnReturn);
       document.removeEventListener("visibilitychange", refreshOnReturn);
     };
   }, [customer, savedRefs]);

@@ -22,3 +22,6 @@ work/
 .codex/
 .agents/
 .DS_Store
+
+# Database backups may contain customer and order data; keep them local.
+backups/

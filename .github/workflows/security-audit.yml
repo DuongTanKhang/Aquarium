@@ -1,0 +1,45 @@
+name: Dependency security audit
+
+on:
+  pull_request:
+    paths:
+      - "outputs/aquarium-shop-backend/package.json"
+      - "outputs/aquarium-shop-backend/package-lock.json"
+      - "outputs/aquarium-shop-dashboard/package.json"
+      - "outputs/aquarium-shop-dashboard/package-lock.json"
+      - ".github/workflows/security-audit.yml"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: npm audit (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            directory: outputs/aquarium-shop-backend
+          - name: frontend
+            directory: outputs/aquarium-shop-dashboard
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: Fail on high or critical vulnerabilities
+        run: npm audit --audit-level=high

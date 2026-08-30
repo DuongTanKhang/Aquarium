@@ -162,7 +162,9 @@ const environmentSchema = z
     // A single-store deployment should use the store's own PayPal REST app.
     // Partner Referrals is only needed when this app onboards other merchants.
     PAYPAL_INTEGRATION_MODE: z.enum(["direct", "connect"]).default("direct"),
-    PAYPAL_ENVIRONMENT: z.enum(["sandbox", "live"]).default("live"),
+    // Sandbox is the fail-safe default; live payments require an explicit
+    // PAYPAL_ENVIRONMENT=live in the server environment.
+    PAYPAL_ENVIRONMENT: z.enum(["sandbox", "live"]).default("sandbox"),
     PAYPAL_PARTNER_MERCHANT_ID: optionalString,
     PAYPAL_PARTNER_ATTRIBUTION_ID: optionalString,
     PAYPAL_RETURN_URL: optionalString,

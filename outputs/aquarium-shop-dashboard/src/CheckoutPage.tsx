@@ -6,8 +6,10 @@ import {
   createPayPalCheckout,
   createOrder,
   getPublicPaymentMethods,
+  listMyOrders,
   type CheckoutOrderResponse,
   type PaymentMethodId,
+  type PublicOrder,
   type PublicProduct,
 } from "./lib/api";
 import { CustomerAuthModal, CustomerVerificationPanel } from "./CustomerAuth";
@@ -52,6 +54,26 @@ function methodLabel(id: PaymentMethodId): string {
   }[id];
 }
 
+function checkoutOrderFromPublic(order: PublicOrder): CheckoutOrderResponse {
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    status: order.status,
+    subtotal: order.subtotal,
+    shippingFee: order.shippingFee,
+    discountAmount: "0.00",
+    totalAmount: order.totalAmount,
+    payment: order.payment
+      ? { method: order.payment.method, status: order.payment.status, amount: order.payment.amount }
+      : null,
+    items: order.items.map((item) => ({
+      productName: item.productName,
+      quantity: item.quantity,
+      subtotal: item.subtotal,
+    })),
+  };
+}
+
 function CheckoutIcon({ kind }: { kind: "arrow" | "lock" | "check" | "close" }) {
   if (kind === "arrow") return <span aria-hidden="true">→</span>;
   if (kind === "check") return <span aria-hidden="true">✓</span>;
@@ -71,7 +93,14 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
   const [authOpen, setAuthOpen] = useState(false);
   const [verificationOpen, setVerificationOpen] = useState(false);
   const [paypalProcessing, setPaypalProcessing] = useState(false);
+  const [paypalStage, setPaypalStage] = useState<"waiting" | "confirming">("waiting");
   const idempotencyKey = useRef<string | null>(null);
+  const paypalPopupRef = useRef<Window | null>(null);
+  const paypalOrderIdRef = useRef<string | null>(null);
+  const paypalMonitorRef = useRef<number | null>(null);
+  const paypalPollInFlightRef = useRef(false);
+  const paypalCancelInFlightRef = useRef(false);
+  const paypalFinishedRef = useRef(false);
 
   const subtotal = useMemo(() => cart.reduce((total, item) => total + Number(item.product.price) * item.quantity, 0), [cart]);
   const shipping = subtotal >= 80 ? 0 : 6;
@@ -112,6 +141,91 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
     }));
   }, [customer]);
 
+  const clearPayPalMonitor = (closePopup = true) => {
+    if (paypalMonitorRef.current !== null) {
+      window.clearInterval(paypalMonitorRef.current);
+      paypalMonitorRef.current = null;
+    }
+    const popup = paypalPopupRef.current;
+    if (closePopup && popup && !popup.closed) popup.close();
+    paypalPopupRef.current = null;
+  };
+
+  const finishPayPal = (order: CheckoutOrderResponse, message?: string) => {
+    if (paypalFinishedRef.current) return;
+    paypalFinishedRef.current = true;
+    clearPayPalMonitor();
+    paypalOrderIdRef.current = null;
+    paypalPollInFlightRef.current = false;
+    paypalCancelInFlightRef.current = false;
+    setPaypalProcessing(false);
+    setPaypalStage("waiting");
+    setSubmitting(false);
+    if (order.payment?.status === "PAID") {
+      setCompletedOrder(order);
+      if (customer) onCompleted(order, customer.email);
+    } else if (message) {
+      setError(message);
+    }
+  };
+
+  const releaseAbandonedPayPal = async (orderId: string) => {
+    if (paypalCancelInFlightRef.current || paypalFinishedRef.current) return;
+    paypalCancelInFlightRef.current = true;
+    clearPayPalMonitor(false);
+    try {
+      const order = await cancelPayPalCheckout(orderId);
+      if (order.payment?.status === "PAID") {
+        finishPayPal(order);
+      } else {
+        finishPayPal(order, "PayPal was closed before payment. The order was cancelled and reserved stock was released.");
+      }
+    } catch (requestError: unknown) {
+      paypalFinishedRef.current = true;
+      paypalOrderIdRef.current = null;
+      paypalCancelInFlightRef.current = false;
+      setPaypalProcessing(false);
+      setPaypalStage("waiting");
+      setSubmitting(false);
+      setError(requestError instanceof ApiError
+        ? `${requestError.message} The order will be released automatically if payment is not completed.`
+        : "PayPal was closed. We could not cancel the reservation immediately; it will expire automatically if unpaid.");
+    }
+  };
+
+  const startPayPalMonitor = (orderId: string, popup: Window) => {
+    if (paypalMonitorRef.current !== null) window.clearInterval(paypalMonitorRef.current);
+    const pollOrder = async () => {
+      if (paypalPollInFlightRef.current || paypalFinishedRef.current) return;
+      paypalPollInFlightRef.current = true;
+      try {
+        const orders = await listMyOrders();
+        const current = orders.find((item) => item.id === orderId);
+        if (!current) return;
+        if (current.payment?.status === "PAID") {
+          finishPayPal(checkoutOrderFromPublic(current));
+        } else if (current.status === "CANCELLED" || current.payment?.status === "FAILED") {
+          finishPayPal(checkoutOrderFromPublic(current), "This PayPal checkout is no longer active. Please try again.");
+        }
+      } catch {
+        // A short polling failure should not cancel a valid PayPal session.
+      } finally {
+        paypalPollInFlightRef.current = false;
+      }
+    };
+    paypalMonitorRef.current = window.setInterval(() => {
+      if (popup.closed) {
+        if (paypalMonitorRef.current !== null) {
+          window.clearInterval(paypalMonitorRef.current);
+          paypalMonitorRef.current = null;
+        }
+        void releaseAbandonedPayPal(orderId);
+        return;
+      }
+      void pollOrder();
+    }, 1_000);
+  };
+
   // PayPal returns to this page after approval. The browser only carries the
   // local order reference; the API looks up the PayPal order ID server-side
   // and performs the capture, so a client cannot substitute an amount/order.
@@ -122,6 +236,8 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
     const orderId = params.get("orderId");
     if (!orderId || (flow !== "return" && flow !== "cancel")) return;
     let active = true;
+    paypalFinishedRef.current = false;
+    setPaypalStage("confirming");
     setPaypalProcessing(true);
     const clearPayPalQuery = () => {
       const next = new URLSearchParams(window.location.search);
@@ -131,14 +247,13 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
       window.history.replaceState({}, "", `${window.location.pathname}${suffix ? `?${suffix}` : ""}${window.location.hash}`);
     };
     const complete = flow === "cancel"
-      ? cancelPayPalCheckout(orderId).then(() => {
-        if (active) setError("PayPal checkout was cancelled. Your reserved stock has been released.");
+      ? cancelPayPalCheckout(orderId).then((order) => {
+        if (active) finishPayPal(order, "PayPal checkout was cancelled. Your reserved stock has been released.");
       })
       : capturePayPalCheckout(orderId).then((result) => {
         if (!active) return;
         if (result.status === "COMPLETED") {
-          setCompletedOrder(result.order);
-          onCompleted(result.order, customer.email);
+          finishPayPal(result.order);
         } else {
           setError("PayPal is still processing this payment. We will update your order when PayPal confirms it.");
         }
@@ -149,6 +264,7 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
       if (!active) return;
       clearPayPalQuery();
       setPaypalProcessing(false);
+      setPaypalStage("waiting");
     });
     return () => { active = false; };
   }, [customer, paypalProcessing, onCompleted]);
@@ -169,6 +285,20 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
       return;
     }
     if (!cart.length || !methods.length || submitting) return;
+    let paypalPopup: Window | null = null;
+    if (paymentMethod === "PAYPAL") {
+      // Open synchronously from the user gesture so browser popup blockers do
+      // not interrupt the hosted PayPal checkout after the API request returns.
+      paypalPopup = window.open("about:blank", "aquarium-paypal", "popup,width=520,height=760,resizable=yes,scrollbars=yes");
+      if (!paypalPopup) {
+        setError("Please allow pop-ups to continue with PayPal checkout.");
+        return;
+      }
+      paypalPopupRef.current = paypalPopup;
+      paypalFinishedRef.current = false;
+      setPaypalStage("waiting");
+      setPaypalProcessing(true);
+    }
     setSubmitting(true);
     setError("");
     try {
@@ -184,13 +314,26 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
       };
       if (paymentMethod === "PAYPAL") {
         const checkout = await createPayPalCheckout(input, idempotencyKey.current);
-        window.location.assign(checkout.approvalUrl);
+        paypalOrderIdRef.current = checkout.order.id;
+        if (paypalPopup?.closed) {
+          await releaseAbandonedPayPal(checkout.order.id);
+          return;
+        }
+        paypalPopup!.location.href = checkout.approvalUrl;
+        startPayPalMonitor(checkout.order.id, paypalPopup!);
         return;
       }
       const order = await createOrder(input, idempotencyKey.current);
       setCompletedOrder(order);
       onCompleted(order, form.customerEmail);
     } catch (requestError: unknown) {
+      if (paypalPopup) {
+        clearPayPalMonitor();
+        paypalOrderIdRef.current = null;
+        paypalFinishedRef.current = true;
+        setPaypalProcessing(false);
+        setPaypalStage("waiting");
+      }
       setError(requestError instanceof ApiError ? requestError.message : "We could not place your order. Please try again.");
     } finally {
       setSubmitting(false);
@@ -254,7 +397,7 @@ export default function CheckoutPage({ cart, customer, onCustomerAuthenticated, 
                 <p className="checkout-payment-note"><CheckoutIcon kind="lock" /> Your payment details are handled by the selected provider. This store never asks for card numbers or bank passwords here.</p>
               </section>
               {error && <div className="checkout-submit-error" role="alert"><CheckoutIcon kind="close" />{error}</div>}
-              <button className="store-primary-button checkout-place-order" type="submit" onClick={(event) => { if (!customer) { event.preventDefault(); setAuthOpen(true); } }} disabled={submitting || paypalProcessing || methodsLoading || Boolean(methodsError) || !methods.length}>{paypalProcessing ? "Confirming PayPal payment…" : submitting ? (paymentMethod === "PAYPAL" ? "Opening PayPal…" : "Placing your order…") : paymentMethod === "PAYPAL" ? <>Continue to PayPal <CheckoutIcon kind="arrow" /></> : <>Place order <CheckoutIcon kind="arrow" /></>}</button>
+              <button className="store-primary-button checkout-place-order" type="submit" onClick={(event) => { if (!customer) { event.preventDefault(); setAuthOpen(true); } }} disabled={submitting || paypalProcessing || methodsLoading || Boolean(methodsError) || !methods.length}>{paypalProcessing ? (paypalStage === "confirming" ? "Confirming PayPal payment…" : "Waiting for PayPal payment…") : submitting ? (paymentMethod === "PAYPAL" ? "Opening PayPal…" : "Placing your order…") : paymentMethod === "PAYPAL" ? <>Continue to PayPal <CheckoutIcon kind="arrow" /></> : <>Place order <CheckoutIcon kind="arrow" /></>}</button>
               <p className="checkout-legal">By placing your order, you agree to our care, delivery and returns guidance.</p>
             </div>
 

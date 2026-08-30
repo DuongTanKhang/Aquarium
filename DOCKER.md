@@ -11,8 +11,13 @@ The root Compose file runs the complete stack together:
 From this directory:
 
 ```powershell
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 docker compose up --build -d
 ```
+
+The root `.env.example` contains safe local defaults and empty provider
+placeholders. Keep the real `.env` out of Git and replace every development
+secret before using a public deployment.
 
 Open:
 
@@ -89,3 +94,44 @@ docker compose down
 
 `docker compose down` keeps the database volume. Add `-v` only when you
 intentionally want to delete the local database and all its data.
+
+## Backups
+
+Create a compressed PostgreSQL backup before migrations or catalog changes:
+
+```powershell
+.\scripts\backup-postgres.ps1
+```
+
+The script writes a timestamped dump under `backups/` (which is ignored by
+Git) and keeps the newest 14 dumps by default. Change the retention count with
+`-KeepLatest`; restoring is intentionally guarded by an explicit confirmation
+switch:
+
+```powershell
+.\scripts\restore-postgres.ps1 -BackupFile .\backups\aquarium-shop-YYYYMMDD-HHMMSS.dump -ConfirmRestore
+```
+
+For production, copy the dump to encrypted off-host storage and test restores
+regularly; a local Docker volume is not a backup.
+
+The repository also includes `.github/workflows/ci.yml`, which runs frontend
+and backend builds, Prisma validation, linting, unit tests, and database
+integration tests on pushes and pull requests.
+
+Run the local smoke check after starting Compose:
+
+```powershell
+.\scripts\smoke-test.ps1
+```
+
+It checks database-backed API readiness, the request-tracing header, and both
+host surfaces without creating an account or changing store data. The full
+staging/public-launch gates are listed in `P4_RELEASE_CHECKLIST.md`.
+
+## Request tracing
+
+Every API response includes an `X-Request-Id` header. The API logs the same ID
+with the method, route, status, and duration (without query strings), making it
+possible to match a customer report to the server log without recording
+payment or authentication secrets.

@@ -25,6 +25,25 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: #0b1437; }
 button, input, select, textarea, option { font: inherit; }
 button { border: 0; cursor: pointer; }
 
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 72%, #ffffff);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 .app-shell {
   min-height: 100vh;
   display: flex;
@@ -765,8 +784,8 @@ select { color-scheme: light; }
 .glass-select-trigger:hover, .glass-select-open .glass-select-trigger { border-color: color-mix(in srgb, var(--accent) 72%, white); background: var(--accent-soft); }
 .glass-select-chevron { width: 7px; height: 7px; flex: 0 0 7px; margin: -4px 2px 0 8px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); transition: transform .18s ease, margin .18s ease; }
 .glass-select-open .glass-select-chevron { margin-top: 4px; transform: rotate(225deg); }
-.glass-select-menu { width: 100%; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; display: grid; gap: 3px; max-height: 230px; overflow-y: auto; padding: 6px; border: 1px solid rgba(255,255,255,.2); border-radius: 12px; background: linear-gradient(145deg, rgba(31,49,112,.96), rgba(7,18,56,.96)); box-shadow: 0 18px 40px rgba(0,0,0,.4), inset 0 1px rgba(255,255,255,.1); backdrop-filter: blur(24px) saturate(145%); animation: glass-menu-in .16s ease-out; }
-.glass-select-option { width: 100%; min-height: 31px; padding: 0 9px; color: #c4d0e9; border-radius: 8px; background: transparent; font-family: "DM Sans", Inter, system-ui, sans-serif; font-size: 10px; text-align: left; }
+.glass-select-menu { width: 100%; box-sizing: border-box; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; display: flex; flex-direction: column; gap: 3px; max-height: 230px; overflow-y: auto; padding: 6px; border: 1px solid rgba(255,255,255,.2); border-radius: 12px; background: linear-gradient(145deg, rgba(31,49,112,.96), rgba(7,18,56,.96)); box-shadow: 0 18px 40px rgba(0,0,0,.4), inset 0 1px rgba(255,255,255,.1); backdrop-filter: blur(24px) saturate(145%); animation: glass-menu-in .16s ease-out; }
+.glass-select-option { width: 100%; height: 31px; min-height: 31px; flex: 0 0 31px; display: flex; align-items: center; box-sizing: border-box; padding: 0 9px; color: #c4d0e9; border-radius: 8px; background: transparent; font-family: "DM Sans", Inter, system-ui, sans-serif; font-size: 10px; line-height: 1.2; text-align: left; }
 .glass-select-option:hover, .glass-select-option-active { color: white; background: var(--accent-soft); }
 @keyframes glass-menu-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -1004,6 +1023,8 @@ select { color-scheme: light; }
 .data-card:has(.orders-admin-table) { overflow: visible; }
 .data-card:has(.orders-admin-table) .data-table-wrap { overflow: visible; }
 .data-card:has(.orders-admin-table) .orders-admin-table td:has(.status-select) { position: relative; z-index: 2; }
+.data-card:has(.orders-admin-table) .orders-admin-table tr:has(.glass-select-open) { position: relative; z-index: 100; }
+.data-card:has(.orders-admin-table) .orders-admin-table td:has(.glass-select-open) { z-index: 101; }
 @media (max-width: 900px) {
   .data-card:has(.orders-admin-table) .data-table-wrap { overflow-x: auto; overflow-y: visible; }
 }

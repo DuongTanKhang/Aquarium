@@ -76,6 +76,10 @@ interface PayPalPaymentPayload {
   capturedAt?: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 const DEFAULT_METHODS: PaymentMethodConfig[] = [
   // Card checkout is intentionally off until a PCI-compliant hosted card
   // processor is integrated. The API must never accept raw PAN/CVV data.
@@ -213,7 +217,7 @@ export class PaymentsService {
    * amount: OrdersService calculates it from current catalog prices first.
    */
   async createPayPalCheckout(dto: CreateOrderDto, customerId: string, idempotencyKey?: string): Promise<PayPalCheckoutStartResponse> {
-    const configured = await this.getPayPalCheckoutConfig();
+    const configured = this.getPayPalCheckoutConfig();
     const order = await this.orders.createPublic({ ...dto, paymentMethod: "PAYPAL" }, customerId, idempotencyKey);
     const existingPayment = await this.prisma.payment.findUnique({ where: { orderId: order.id }, select: { status: true, providerPayload: true } });
     const existingProvider = this.readPayPalPayload(existingPayment?.providerPayload);
@@ -273,7 +277,7 @@ export class PaymentsService {
    * or reserving stock a second time. This is used by My orders when an older
    * pending checkout has no usable approval URL anymore. */
   async resumePayPalCheckout(orderId: string, customerId: string): Promise<PayPalCheckoutStartResponse> {
-    const configured = await this.getPayPalCheckoutConfig();
+    const configured = this.getPayPalCheckoutConfig();
     const current = await this.prisma.order.findFirst({ where: { id: orderId, customerId }, include: { payment: true } });
     if (!current || !current.payment) throw new BadRequestException("PayPal order not found");
     if (current.payment.method !== "PAYPAL" || current.payment.status !== "PENDING" || current.status === OrderStatus.CANCELLED) {
@@ -327,7 +331,7 @@ export class PaymentsService {
    * marked paid, and the local update is idempotent for refresh/retry safety.
    */
   async capturePayPalCheckout(orderId: string, customerId: string): Promise<PayPalCheckoutCaptureResponse> {
-    const configured = await this.getPayPalCheckoutConfig();
+    const configured = this.getPayPalCheckoutConfig();
     const current = await this.prisma.order.findFirst({
       where: { id: orderId, customerId },
       include: { payment: true },
@@ -378,7 +382,7 @@ export class PaymentsService {
       return { order: await this.orders.getById(orderId), captureId, status };
     }
 
-    const row = await this.prisma.$transaction(async (transaction) => {
+    await this.prisma.$transaction(async (transaction) => {
       const payment = await transaction.payment.findUnique({ where: { orderId }, select: { status: true } });
       if (!payment) throw new BadRequestException("Payment record not found");
       if (payment.status === "PAID") return transaction.order.findUniqueOrThrow({ where: { id: orderId }, include: { payment: true, items: true, customer: { select: { id: true, email: true, fullName: true } }, statusHistory: { orderBy: { createdAt: "asc" } } } });
@@ -407,7 +411,7 @@ export class PaymentsService {
     if (!transmissionId || !transmissionTime || !transmissionSig || !certUrl || !authAlgo) {
       throw new BadRequestException("PayPal webhook headers are incomplete");
     }
-    const configured = await this.getPayPalCheckoutConfig();
+    const configured = this.getPayPalCheckoutConfig();
     const accessToken = await this.getPayPalAccessToken(configured.apiBase, configured.clientId, configured.clientSecret);
     const verifyResponse = await this.fetchWithTimeout(`${configured.apiBase}/v1/notifications/verify-webhook-signature`, {
       method: "POST",
@@ -437,7 +441,7 @@ export class PaymentsService {
       await this.prisma.$transaction(async (transaction) => {
         const payment = await transaction.payment.findUnique({ where: { orderId: match.orderId }, select: { status: true } });
         if (!payment || payment.status === "PAID") return;
-        await transaction.payment.update({ where: { orderId: match.orderId }, data: { status: "PAID", transactionCode: captureId, paidAt: new Date(), providerPayload: { ...provider, status: "COMPLETED", captureId, capturedAt: new Date().toISOString() } as Prisma.InputJsonValue } });
+        await transaction.payment.update({ where: { orderId: match.orderId }, data: { status: "PAID", transactionCode: captureId, paidAt: new Date(), providerPayload: { ...provider, status: "COMPLETED", captureId, capturedAt: new Date().toISOString() } } });
         await transaction.order.update({ where: { id: match.orderId }, data: { status: OrderStatus.CONFIRMED } });
         await transaction.orderStatusHistory.create({ data: { orderId: match.orderId, status: OrderStatus.CONFIRMED, note: "PayPal webhook confirmed payment" } });
       });
@@ -445,7 +449,7 @@ export class PaymentsService {
     } else if (eventType === "PAYMENT.CAPTURE.REFUNDED" || eventType === "PAYMENT.CAPTURE.REVERSED") {
       if (match.status === "PAID") {
         const provider = this.readPayPalPayload(match.providerPayload) ?? {};
-        await this.prisma.payment.update({ where: { orderId: match.orderId }, data: { status: "REFUNDED", providerPayload: { ...provider, status: "REFUNDED", capturedAt: new Date().toISOString() } as Prisma.InputJsonValue } });
+        await this.prisma.payment.update({ where: { orderId: match.orderId }, data: { status: "REFUNDED", providerPayload: { ...provider, status: "REFUNDED", capturedAt: new Date().toISOString() } } });
       }
     } else if (eventType === "PAYMENT.CAPTURE.DENIED" || eventType === "CHECKOUT.PAYMENT-APPROVAL.REVERSED") {
       if (match.order.customerId) await this.orders.failPendingPayment(match.orderId, match.order.customerId, "PayPal reported that the payment was not completed");
@@ -453,7 +457,7 @@ export class PaymentsService {
     return { received: true };
   }
 
-  private async getPayPalCheckoutConfig(): Promise<{ apiBase: string; clientId: string; clientSecret: string }> {
+  private getPayPalCheckoutConfig(): { apiBase: string; clientId: string; clientSecret: string } {
     const clientId = this.config.get<string | undefined>("PAYPAL_CLIENT_ID");
     const clientSecret = this.config.get<string | undefined>("PAYPAL_CLIENT_SECRET");
     if (!clientId || !clientSecret) throw new ServiceUnavailableException("PayPal checkout is not configured on the server");
@@ -499,32 +503,32 @@ export class PaymentsService {
   }
 
   private getPayPalCapture(data: Record<string, unknown>): { id: string | null; status: string | null } | null {
-    const units = Array.isArray(data.purchase_units) ? data.purchase_units : [];
+    const units = Array.isArray(data.purchase_units) ? data.purchase_units.filter(isRecord) : [];
     const first = units[0];
-    const payments = first && typeof first === "object" && first !== null ? (first as Record<string, unknown>).payments : null;
-    const captures = payments && typeof payments === "object" && payments !== null ? (payments as Record<string, unknown>).captures : null;
-    const capture = Array.isArray(captures) ? captures[0] : null;
-    if (!capture || typeof capture !== "object") return null;
-    return { id: typeof (capture as Record<string, unknown>).id === "string" ? (capture as Record<string, unknown>).id as string : null, status: typeof (capture as Record<string, unknown>).status === "string" ? (capture as Record<string, unknown>).status as string : null };
+    const payments = isRecord(first?.payments) ? first.payments : null;
+    const captures = payments && Array.isArray(payments.captures) ? payments.captures.filter(isRecord) : [];
+    const capture = captures[0];
+    if (!capture) return null;
+    return { id: typeof capture.id === "string" ? capture.id : null, status: typeof capture.status === "string" ? capture.status : null };
   }
 
   private matchesPayPalAmount(data: Record<string, unknown>, localAmount: string | Prisma.Decimal): boolean {
     const capture = this.getPayPalCapture(data);
-    const units = Array.isArray(data.purchase_units) ? data.purchase_units : [];
+    const units = Array.isArray(data.purchase_units) ? data.purchase_units.filter(isRecord) : [];
     const first = units[0];
-    const payments = first && typeof first === "object" && first !== null ? (first as Record<string, unknown>).payments : null;
-    const captures = payments && typeof payments === "object" && payments !== null ? (payments as Record<string, unknown>).captures : null;
-    const captureRow = Array.isArray(captures) ? captures[0] : null;
-    const amount = captureRow && typeof captureRow === "object" && captureRow !== null ? (captureRow as Record<string, unknown>).amount : null;
-    const currency = amount && typeof amount === "object" && amount !== null ? (amount as Record<string, unknown>).currency_code : null;
-    const value = amount && typeof amount === "object" && amount !== null ? (amount as Record<string, unknown>).value : null;
+    const payments = isRecord(first?.payments) ? first.payments : null;
+    const captures = payments && Array.isArray(payments.captures) ? payments.captures.filter(isRecord) : [];
+    const captureRow = captures[0];
+    const amount = isRecord(captureRow?.amount) ? captureRow.amount : null;
+    const currency = amount?.currency_code;
+    const value = amount?.value;
     return Boolean(capture && currency === "USD" && typeof value === "string" && new Prisma.Decimal(value).eq(new Prisma.Decimal(localAmount.toString())));
   }
 
   private payPalIssue(data: Record<string, unknown>): string | null {
-    const details = Array.isArray(data.details) ? data.details : [];
+    const details = Array.isArray(data.details) ? data.details.filter(isRecord) : [];
     const first = details[0];
-    return first && typeof first === "object" && first !== null && typeof (first as { issue?: unknown }).issue === "string" ? (first as { issue: string }).issue : null;
+    return typeof first?.issue === "string" ? first.issue : null;
   }
 
   private async getStoredProviderConnections(): Promise<StoredProviderConnections> {

@@ -19,7 +19,7 @@ describe("Health endpoint (e2e)", () => {
       providers: [
         {
           provide: PrismaService,
-          useValue: { $queryRaw: async () => [{ ok: 1 }] },
+          useValue: { $queryRaw: () => Promise.resolve([{ ok: 1 }]) },
         },
       ],
     }).compile();

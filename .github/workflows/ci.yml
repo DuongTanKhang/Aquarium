@@ -1,0 +1,88 @@
+name: Aquarium Shop CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aquarium-shop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: outputs/aquarium-shop-dashboard
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: outputs/aquarium-shop-dashboard/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build frontend
+        run: npm run build
+
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aquarium_shop
+          POSTGRES_USER: aquarium
+          POSTGRES_PASSWORD: aquarium
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U aquarium -d aquarium_shop"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=12
+    defaults:
+      run:
+        working-directory: outputs/aquarium-shop-backend
+    env:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://aquarium:aquarium@127.0.0.1:5432/aquarium_shop?schema=public
+      JWT_ACCESS_SECRET: ci-access-secret-with-at-least-64-characters-0123456789abcdef
+      REFRESH_TOKEN_PEPPER: ci-refresh-pepper-with-at-least-64-characters-0123456789abcdef
+      ONE_TIME_TOKEN_PEPPER: ci-one-time-pepper-with-at-least-64-characters-0123456789abcdef
+      MFA_ENCRYPTION_KEY_BASE64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      RUN_DATABASE_TESTS: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: outputs/aquarium-shop-backend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+      - name: Apply database migrations
+        run: npm run db:deploy
+      - name: Validate Prisma schema
+        run: npx prisma validate
+      - name: Build backend
+        run: npm run build
+      - name: Lint backend
+        run: npm run lint
+      - name: Run unit tests
+        run: npm test -- --runInBand
+      - name: Run database integration tests
+        run: npm run test:e2e -- --runInBand

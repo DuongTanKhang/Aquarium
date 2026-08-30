@@ -358,7 +358,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     // idempotency guard that makes cancellation, capture and expiry races safe.
     const claimed = await transaction.payment.updateMany({
       where: { orderId: order.id, status: "PENDING" },
-      data: { status: "FAILED", checkoutExpiresAt: null, providerPayload: { ...(order.payment.providerPayload && typeof order.payment.providerPayload === "object" && !Array.isArray(order.payment.providerPayload) ? order.payment.providerPayload as Record<string, unknown> : {}), reason, failedAt: new Date().toISOString() } as Prisma.InputJsonValue },
+      data: { status: "FAILED", checkoutExpiresAt: null, providerPayload: { ...(order.payment.providerPayload && typeof order.payment.providerPayload === "object" && !Array.isArray(order.payment.providerPayload) ? order.payment.providerPayload as Record<string, unknown> : {}), reason, failedAt: new Date().toISOString() } },
     });
     if (claimed.count !== 1) return false;
     for (const item of order.items) {

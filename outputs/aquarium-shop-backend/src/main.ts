@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { ValidationPipe } from "@nestjs/common";
+import { Logger, ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import { NestExpressApplication } from "@nestjs/platform-express";
@@ -7,6 +7,7 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import cookieParser from "cookie-parser";
 import type { NextFunction, Request, Response } from "express";
 import helmet from "helmet";
+import { randomUUID } from "node:crypto";
 import { AppModule } from "./app.module.js";
 
 async function bootstrap(): Promise<void> {
@@ -38,7 +39,27 @@ async function bootstrap(): Promise<void> {
     frameguard: { action: "deny" },
   }));
   app.use(cookieParser());
+  const requestLogger = new Logger("HTTP");
   app.use((request: Request, response: Response, next: NextFunction) => {
+    const suppliedRequestId = request.get("x-request-id");
+    const requestId = suppliedRequestId && /^[A-Za-z0-9._-]{8,80}$/.test(suppliedRequestId)
+      ? suppliedRequestId
+      : randomUUID();
+    const startedAt = process.hrtime.bigint();
+    response.setHeader("X-Request-Id", requestId);
+    response.on("finish", () => {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      const entry = JSON.stringify({
+        requestId,
+        method: request.method,
+        path: request.originalUrl.split("?", 1)[0],
+        status: response.statusCode,
+        durationMs: Math.round(durationMs * 100) / 100,
+      });
+      if (response.statusCode >= 500) requestLogger.error(entry);
+      else requestLogger.log(entry);
+    });
+
     // Admin/API responses contain user and payment configuration data. Do not
     // allow an intermediary or browser cache to retain those responses.
     if (request.path.startsWith("/api/v1")) {
