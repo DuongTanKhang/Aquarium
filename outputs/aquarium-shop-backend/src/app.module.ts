@@ -1,5 +1,5 @@
 import { Module } from "@nestjs/common";
-import { ConfigModule } from "@nestjs/config";
+import { ConfigModule, ConfigService } from "@nestjs/config";
 import { APP_GUARD } from "@nestjs/core";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { validateEnvironment } from "./common/config/environment.js";
@@ -26,14 +26,15 @@ import { UsersModule } from "./modules/users/users.module.js";
       cache: true,
       validate: validateEnvironment,
     }),
-    ThrottlerModule.forRoot([
-      {
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => [{
         name: "default",
-        ttl: 60_000,
-        limit: 120,
-        blockDuration: 60_000,
-      },
-    ]),
+        ttl: config.get<number>("THROTTLE_GLOBAL_TTL_MS", 60_000),
+        limit: config.get<number>("THROTTLE_GLOBAL_LIMIT", 600),
+        blockDuration: config.get<number>("THROTTLE_BLOCK_DURATION_MS", 5_000),
+      }],
+    }),
     PrismaModule,
     HealthModule,
     AuthModule,

@@ -2,8 +2,53 @@
 // Set VITE_API_BASE_URL when the frontend is deployed separately from the API.
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 const API_REQUEST_TIMEOUT_MS = 15_000;
-const MAX_IDEMPOTENT_RETRIES = 2;
+const MAX_IDEMPOTENT_RETRIES = 3;
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const AUTH_SESSION_KEY = "aquarium-auth-session";
+const CUSTOMER_SESSION_TTL_MS = 15 * 60 * 1000;
+
+export type AuthSessionRole = "ADMIN" | "CUSTOMER";
+
+interface AuthSessionRecord {
+  role: AuthSessionRole;
+  startedAt: number;
+}
+
+function readAuthSession(): AuthSessionRecord | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(AUTH_SESSION_KEY) ?? "null") as Partial<AuthSessionRecord> | null;
+    if (!parsed || (parsed.role !== "ADMIN" && parsed.role !== "CUSTOMER") || typeof parsed.startedAt !== "number" || !Number.isFinite(parsed.startedAt)) return null;
+    return parsed as AuthSessionRecord;
+  } catch {
+    return null;
+  }
+}
+
+export function startAuthSession(role: AuthSessionRole): void {
+  try { window.sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({ role, startedAt: Date.now() } satisfies AuthSessionRecord)); } catch { /* session storage can be unavailable */ }
+}
+
+export function clearAuthSession(): void {
+  try { window.sessionStorage.removeItem(AUTH_SESSION_KEY); } catch { /* session storage can be unavailable */ }
+}
+
+export function hasActiveAuthSession(role?: AuthSessionRole): boolean {
+  const session = readAuthSession();
+  if (!session || (role && session.role !== role)) return false;
+  if (session.role === "CUSTOMER" && Date.now() - session.startedAt >= CUSTOMER_SESSION_TTL_MS) {
+    clearAuthSession();
+    return false;
+  }
+  return true;
+}
+
+export function authSessionRemainingMs(role: AuthSessionRole): number | null {
+  const session = readAuthSession();
+  if (!session || session.role !== role) return null;
+  if (role === "ADMIN") return Number.POSITIVE_INFINITY;
+  return Math.max(0, CUSTOMER_SESSION_TTL_MS - (Date.now() - session.startedAt));
+}
 
 export interface Category {
   id: string;
@@ -197,6 +242,7 @@ export interface ReturnRequest {
   status: ReturnRequestStatus;
   reason: string;
   amount: string;
+  payment: { method: string; status: string; providerCaptureId: string | null } | null;
   adminNote: string | null;
   resolutionNote: string | null;
   providerRefundId: string | null;
@@ -382,7 +428,10 @@ async function apiRequest<T>(path: string, init: ApiRequestInit = {}): Promise<T
           "/auth/refresh",
           "/auth/mfa/verify-login",
         ].includes(path);
-        if (response.status === 401 && authRefreshAllowed) {
+        // Refresh only inside an explicitly started tab session. This keeps
+        // customer sessions capped at 15 minutes and prevents an admin cookie
+        // from silently signing the admin portal back in after its tab closes.
+        if (response.status === 401 && authRefreshAllowed && hasActiveAuthSession()) {
           refreshed = true;
           try {
             const result = await refreshAccessToken();
@@ -396,8 +445,10 @@ async function apiRequest<T>(path: string, init: ApiRequestInit = {}): Promise<T
         if (canRetry && RETRYABLE_STATUSES.has(response.status) && attempt < MAX_IDEMPOTENT_RETRIES) {
           const retryAfter = Number(response.headers.get("retry-after"));
           const waitMs = Number.isFinite(retryAfter)
-            ? Math.min(Math.max(retryAfter * 1_000, 250), 5_000)
-            : 250 * 2 ** attempt;
+            ? Math.min(Math.max(retryAfter * 1_000, 250), 6_000)
+            : response.status === 429
+              ? Math.min(1_000 * 2 ** attempt + Math.round(Math.random() * 250), 6_000)
+              : 250 * 2 ** attempt;
           await new Promise((resolve) => window.setTimeout(resolve, waitMs));
           continue;
         }

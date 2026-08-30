@@ -7,6 +7,7 @@ import {
   requestPasswordReset,
   resetPassword,
   saveAccessToken,
+  startAuthSession,
   verifyMfaLogin,
   type AuthResult,
   type MfaPendingResult,
@@ -46,6 +47,7 @@ export default function LoginPage({ onAuthenticated }: { onAuthenticated: (user:
         return;
       }
       saveAccessToken(result.accessToken);
+      startAuthSession("ADMIN");
       window.localStorage.setItem("aquarium-admin-email", result.user.email);
       onAuthenticated(result.user);
     } catch (requestError) {
@@ -73,6 +75,7 @@ export default function LoginPage({ onAuthenticated }: { onAuthenticated: (user:
         return;
       }
       saveAccessToken(result.accessToken);
+      startAuthSession("ADMIN");
       window.localStorage.setItem("aquarium-admin-email", result.user.email);
       onAuthenticated(result.user);
     } catch (requestError) {

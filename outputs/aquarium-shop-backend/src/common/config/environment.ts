@@ -40,6 +40,12 @@ const environmentSchema = z
       .min(1_000)
       .max(300_000)
       .default(30_000),
+    // The storefront and admin dashboard poll read-only endpoints while they
+    // are visible. Keep a generous per-IP budget for normal multi-tab use,
+    // while the auth/contact controllers retain their stricter route limits.
+    THROTTLE_GLOBAL_LIMIT: z.coerce.number().int().min(30).max(10_000).default(600),
+    THROTTLE_GLOBAL_TTL_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
+    THROTTLE_BLOCK_DURATION_MS: z.coerce.number().int().min(0).max(600_000).default(5_000),
     CORS_ORIGIN: z.string().default("http://localhost:3000"),
     JWT_ACCESS_SECRET: z
       .string()

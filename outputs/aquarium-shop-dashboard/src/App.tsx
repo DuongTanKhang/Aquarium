@@ -20,7 +20,7 @@ import OrdersWorkspace from "./OrdersWorkspace";
 import PaymentWorkspace from "./PaymentWorkspace";
 import ReturnsWorkspace from "./ReturnsWorkspace";
 import Storefront from "./Storefront";
-import { ApiError, clearAccessToken, getAccessToken, getDashboardSummary, logout, refreshAccessToken, saveAccessToken, type DashboardSummary } from "./lib/api";
+import { ApiError, clearAccessToken, clearAuthSession, getAccessToken, getDashboardSummary, hasActiveAuthSession, logout, refreshAccessToken, saveAccessToken, type DashboardSummary } from "./lib/api";
 
 type IconName =
   | "grid"
@@ -352,8 +352,8 @@ function AdminApp() {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("demo") === "1" || window.location.hash === "#demo";
   });
-  const [isAuthenticated, setIsAuthenticated] = useState(() => demoMode || Boolean(getAccessToken()));
-  const [authChecking, setAuthChecking] = useState(() => !demoMode && !getAccessToken());
+  const [isAuthenticated, setIsAuthenticated] = useState(() => demoMode || (Boolean(getAccessToken()) && hasActiveAuthSession("ADMIN")));
+  const [authChecking, setAuthChecking] = useState(() => !demoMode && !hasActiveAuthSession("ADMIN"));
   const refreshInFlight = useRef<Promise<Awaited<ReturnType<typeof refreshAccessToken>> | null> | null>(null);
   const [activeView, setActiveView] = useState<View>(() => {
     if (typeof window === "undefined") return "overview";
@@ -375,6 +375,15 @@ function AdminApp() {
 
   useEffect(() => {
     if (demoMode) return;
+    // Admin auth is intentionally tab-scoped. A closed tab loses this
+    // sessionStorage marker, so an old refresh cookie cannot silently reopen
+    // the protected portal.
+    if (!hasActiveAuthSession("ADMIN")) {
+      clearAccessToken();
+      setAuthChecking(false);
+      setIsAuthenticated(false);
+      return;
+    }
     if (getAccessToken()) {
       setAuthChecking(false);
       return;
@@ -402,27 +411,28 @@ function AdminApp() {
   useEffect(() => {
     if (!isAuthenticated || demoMode) return;
     let disposed = false;
-    let initialLoad = true;
     const syncSummary = async () => {
       if (!getAccessToken()) {
         if (!disposed) {
           clearAccessToken();
+          clearAuthSession();
           setIsAuthenticated(false);
         }
         return;
       }
       const result = await getSummary();
       if (disposed) return;
-      if (result.unauthorized || (initialLoad && !result.value)) {
+      if (result.unauthorized) {
         // Never leave the live host showing design-time fallback numbers when
-        // the access token is missing or expired. A later transient network
-        // failure keeps the last known server snapshot until the next retry.
+        // the access token is missing or expired. A transient network, 429, or
+        // provider failure keeps the last known snapshot until the next retry
+        // instead of ejecting the administrator from the dashboard.
         clearAccessToken();
+        clearAuthSession();
         setIsAuthenticated(false);
         return;
       }
       if (result.value) setSummary((current) => ({ ...current, ...result.value }));
-      initialLoad = false;
     };
     const refreshIfVisible = () => {
       if (document.visibilityState === "visible") void syncSummary();
@@ -547,6 +557,7 @@ function AdminApp() {
               onLogout={() => {
                 void logout().catch(() => undefined);
                 clearAccessToken();
+                clearAuthSession();
                 setIsAuthenticated(false);
               }}
             />

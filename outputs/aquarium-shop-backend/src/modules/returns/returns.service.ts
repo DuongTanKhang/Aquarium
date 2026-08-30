@@ -8,7 +8,7 @@ import { CreateReturnRequestDto } from "./dto/create-return-request.dto.js";
 import { UpdateReturnRequestDto } from "./dto/update-return-request.dto.js";
 
 const requestInclude = {
-  order: { select: { id: true, orderNumber: true, status: true, customerEmail: true, customerName: true, totalAmount: true } },
+  order: { select: { id: true, orderNumber: true, status: true, customerEmail: true, customerName: true, totalAmount: true, payment: { select: { method: true, status: true, providerCaptureId: true } } } },
   customer: { select: { id: true, email: true, fullName: true } },
 } satisfies Prisma.ReturnRequestInclude;
 type ReturnRequestWithRelations = Prisma.ReturnRequestGetPayload<{ include: typeof requestInclude }>;
@@ -55,14 +55,21 @@ export class ReturnsService {
     }
     let providerRefundId = dto.providerRefundId?.trim();
     let refundStatus: string | undefined;
+    if (dto.status === ReturnRequestStatus.REFUNDED && !providerRefundId && current.providerRefundId) {
+      providerRefundId = current.providerRefundId;
+      refundStatus = "RECORDED";
+    }
     if (dto.status === ReturnRequestStatus.REFUNDED && !providerRefundId) {
-      const payment = await this.prisma.payment.findUnique({ where: { orderId: current.orderId }, select: { method: true } });
+      const payment = current.order.payment;
       if (payment?.method !== "PAYPAL") {
         throw new BadRequestException("Only PayPal refunds can be automated; provide a processor refund reference");
       }
       const refund = await this.payments.refundPayPalCapture(current.orderId);
       providerRefundId = refund.refundId;
       refundStatus = refund.status;
+    }
+    if (dto.status === ReturnRequestStatus.REFUNDED && providerRefundId && current.order.payment?.method === "PAYPAL" && providerRefundId !== current.providerRefundId) {
+      throw new BadRequestException("PayPal refunds must be issued by the server; do not enter a manual reference");
     }
     if (dto.status === ReturnRequestStatus.REFUNDED && !providerRefundId) {
       throw new BadRequestException("A provider refund reference is required before marking money as refunded");
@@ -95,6 +102,11 @@ export class ReturnsService {
       status: row.status,
       reason: row.reason,
       amount: row.amount.toString(),
+      payment: row.order.payment ? {
+        method: row.order.payment.method,
+        status: row.order.payment.status,
+        providerCaptureId: row.order.payment.providerCaptureId,
+      } : null,
       adminNote: row.adminNote,
       resolutionNote: row.resolutionNote,
       providerRefundId: row.providerRefundId,

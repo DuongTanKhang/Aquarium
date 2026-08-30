@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ApiError,
+  authSessionRemainingMs,
+  clearAuthSession,
+  clearAccessToken,
   type CheckoutOrderResponse,
+  hasActiveAuthSession,
   getCurrentUser,
   getAccessToken,
   addFavorite,
   listPublicCategories,
   listPublicProducts,
   listFavorites,
+  logout,
   removeFavorite,
   refreshAccessToken,
   saveAccessToken,
@@ -19,7 +24,7 @@ import {
 import CheckoutPage from "./CheckoutPage";
 import ContactPage from "./ContactPage";
 import FavoritesPage from "./FavoritesPage";
-import CustomerOrdersPage from "./CustomerOrdersPage";
+import CustomerOrdersPage, { CustomerReturnsPage } from "./CustomerOrdersPage";
 import CustomerAccountPage, { CustomerAuthModal, CustomerAuthPage, CustomerEmailVerificationPage } from "./CustomerAuth";
 
 type StoreIconName =
@@ -222,6 +227,7 @@ export default function Storefront() {
   const [notice, setNotice] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(() => typeof window !== "undefined" && window.location.pathname === "/shop/checkout");
   const [ordersOpen, setOrdersOpen] = useState(() => typeof window !== "undefined" && window.location.pathname === "/shop/orders");
+  const [returnsOpen, setReturnsOpen] = useState(() => typeof window !== "undefined" && window.location.pathname === "/shop/returns");
   const [accountOpen, setAccountOpen] = useState(() => typeof window !== "undefined" && window.location.pathname === "/shop/account");
   const [contactOpen, setContactOpen] = useState(() => typeof window !== "undefined" && window.location.pathname === "/shop/contact");
   const [favoritesOpen, setFavoritesOpen] = useState(() => typeof window !== "undefined" && window.location.pathname === "/shop/favorites");
@@ -256,6 +262,7 @@ export default function Storefront() {
     const syncRoute = () => {
       setCheckoutOpen(window.location.pathname === "/shop/checkout");
       setOrdersOpen(window.location.pathname === "/shop/orders");
+      setReturnsOpen(window.location.pathname === "/shop/returns");
       setAccountOpen(window.location.pathname === "/shop/account");
       setContactOpen(window.location.pathname === "/shop/contact");
       setFavoritesOpen(window.location.pathname === "/shop/favorites");
@@ -300,10 +307,24 @@ export default function Storefront() {
     const clearGuestCart = () => {
       if (!active) return;
       setCart([]);
-      try { window.localStorage.removeItem("aquarium-store-cart"); } catch { /* storage can be unavailable */ }
+      try {
+        window.localStorage.removeItem("aquarium-store-cart");
+        // Order lookup references are private account data; do not retain or
+        // display them after a customer session is absent or expires.
+        window.localStorage.removeItem("aquarium-store-order-refs");
+      } catch { /* storage can be unavailable */ }
     };
     const load = async () => {
       try {
+        // Customer sessions are explicitly tab-scoped and expire 15 minutes
+        // after sign-in. Do not use an old refresh cookie to resurrect a
+        // session after the policy window or after the tab was closed.
+        if (!hasActiveAuthSession("CUSTOMER")) {
+          clearAccessToken();
+          clearGuestCart();
+          finish();
+          return;
+        }
         const result = getAccessToken() ? { accessToken: getAccessToken()!, user: null } : await refreshAccessToken();
         if (!getAccessToken()) saveAccessToken(result.accessToken);
         if (result.user && result.user.role !== "CUSTOMER") { clearGuestCart(); finish(); return; }
@@ -320,6 +341,27 @@ export default function Storefront() {
     void load();
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!customerUser) return undefined;
+    const remaining = authSessionRemainingMs("CUSTOMER");
+    if (remaining === null || remaining <= 0) {
+      void logout().catch(() => undefined);
+      clearAccessToken();
+      clearAuthSession();
+      setCustomerUser(null);
+      setNotice("Your customer session expired. Please sign in again.");
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      void logout().catch(() => undefined);
+      clearAccessToken();
+      clearAuthSession();
+      setCustomerUser(null);
+      setNotice("Your customer session expired. Please sign in again.");
+    }, remaining + 50);
+    return () => window.clearTimeout(timer);
+  }, [customerUser?.id]);
 
   useEffect(() => {
     let active = true;
@@ -478,6 +520,7 @@ export default function Storefront() {
     setCartOpen(false);
     window.history.pushState({}, "", "/shop/checkout");
     setCheckoutOpen(true);
+    setReturnsOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -486,6 +529,7 @@ export default function Storefront() {
     window.history.pushState({}, "", "/shop/orders");
     setCheckoutOpen(false);
     setOrdersOpen(true);
+    setReturnsOpen(false);
     setAccountOpen(false);
     setContactOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -494,6 +538,29 @@ export default function Storefront() {
   const closeOrders = () => {
     window.history.pushState({}, "", "/shop");
     setOrdersOpen(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const openReturns = () => {
+    if (!customerUser) {
+      setNotice("Please sign in to request a return or refund.");
+      setCustomerAuthOpen(true);
+      return;
+    }
+    setCartOpen(false);
+    window.history.pushState({}, "", "/shop/returns");
+    setCheckoutOpen(false);
+    setOrdersOpen(false);
+    setReturnsOpen(true);
+    setAccountOpen(false);
+    setContactOpen(false);
+    setFavoritesOpen(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const closeReturns = () => {
+    window.history.pushState({}, "", "/shop");
+    setReturnsOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -508,6 +575,7 @@ export default function Storefront() {
     window.history.pushState({}, "", "/shop/account");
     setCheckoutOpen(false);
     setOrdersOpen(false);
+    setReturnsOpen(false);
     setContactOpen(false);
     setAccountOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -524,6 +592,7 @@ export default function Storefront() {
     window.history.pushState({}, "", "/shop/contact");
     setCheckoutOpen(false);
     setOrdersOpen(false);
+    setReturnsOpen(false);
     setAccountOpen(false);
     setContactOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -540,6 +609,7 @@ export default function Storefront() {
     window.history.pushState({}, "", "/shop/favorites");
     setCheckoutOpen(false);
     setOrdersOpen(false);
+    setReturnsOpen(false);
     setAccountOpen(false);
     setContactOpen(false);
     setFavoritesOpen(true);
@@ -639,7 +709,8 @@ export default function Storefront() {
 
   if (emailVerificationOpen) return <CustomerEmailVerificationPage onAuthenticated={setCustomerUser} onBack={() => { window.location.href = "/shop/account"; }} />;
   if (checkoutOpen) return <CheckoutPage cart={cart} customer={customerUser} onCustomerAuthenticated={setCustomerUser} onUpdateQuantity={updateQuantity} onBack={closeCheckout} onCompleted={completeCheckout} />;
-  if (ordersOpen) return <CustomerOrdersPage customer={customerUser} onBack={closeOrders} />;
+  if (ordersOpen) return customerUser ? <CustomerOrdersPage customer={customerUser} onBack={closeOrders} /> : <CustomerAuthPage onAuthenticated={(user) => { setCustomerUser(user); setCustomerAuthOpen(false); }} onBack={closeOrders} />;
+  if (returnsOpen) return customerUser ? <CustomerReturnsPage customer={customerUser} onBack={closeReturns} /> : <CustomerAuthPage onAuthenticated={(user) => { setCustomerUser(user); setCustomerAuthOpen(false); }} onBack={closeReturns} />;
   if (accountOpen) return customerUser ? <CustomerAccountPage user={customerUser} onUpdated={setCustomerUser} onLogout={() => { setCustomerUser(null); closeAccount(); }} onBack={closeAccount} onOpenOrders={openOrders} /> : <CustomerAuthPage onAuthenticated={(user) => { setCustomerUser(user); closeAccount(); }} onBack={closeAccount} />;
   if (contactOpen) return <ContactPage onBack={closeContact} />;
   if (favoritesOpen) return <FavoritesPage products={favoriteProducts.length ? favoriteProducts : products.filter((product) => favoriteIds.includes(product.id))} onBack={closeFavorites} onOpenProduct={openFavoriteProduct} onToggleFavorite={toggleFavorite} />;
@@ -658,6 +729,7 @@ export default function Storefront() {
           <a href="/shop/contact" onClick={(event) => { event.preventDefault(); setMenuOpen(false); openContact(); }}>Contact</a>
           <a href="/shop/favorites" onClick={(event) => { event.preventDefault(); setMenuOpen(false); openFavorites(); }}>Favorites{favoriteIds.length ? ` · ${favoriteIds.length}` : ""}</a>
           <a href="/shop/orders" onClick={(event) => { event.preventDefault(); setMenuOpen(false); openOrders(); }}>My orders</a>
+          <a href="/shop/returns" onClick={(event) => { event.preventDefault(); setMenuOpen(false); openReturns(); }}>Returns</a>
         </nav>
         <div className="store-actions">
           <label className="store-search"><StoreIcon name="search" size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search fish, plants..." aria-label="Search products" /></label>
@@ -686,7 +758,7 @@ export default function Storefront() {
         <section className="store-newsletter"><div><span className="store-kicker">A note from the water</span><h2>Good things,<br /><em>once in a while.</em></h2></div><form onSubmit={(event) => { event.preventDefault(); if (newsletterBusy) return; const email = newsletterEmail.trim(); if (!email) return; setNewsletterBusy(true); void subscribeNewsletter(email).then(() => { setNotice("You're on the list — welcome to the water."); setNewsletterEmail(""); }).catch((requestError: unknown) => setNotice(requestError instanceof ApiError ? requestError.message : "We could not subscribe you right now.")).finally(() => setNewsletterBusy(false)); }}><p>New arrivals, care notes and a little inspiration for your tank.</p><label><input type="email" required value={newsletterEmail} onChange={(event) => setNewsletterEmail(event.target.value)} placeholder="Your email address" aria-label="Email address" /><button type="submit" aria-label="Subscribe" disabled={newsletterBusy}><StoreIcon name="arrow" /></button></label></form></section>
       </main>
 
-      <footer className="store-footer"><a className="store-logo" href="/shop"><span className="store-logo-mark"><StoreIcon name="leaf" size={20} /></span><span><strong>AQUA</strong><small>THE LIVING SHOP</small></span></a><p>Thoughtful aquatics for slower, brighter days.</p><div><a href="#shop">Shop</a><a href="#care">Care</a><a href="#story">Journal</a><a href="/shop/contact" onClick={(event) => { event.preventDefault(); openContact(); }}>Contact</a><a href="/shop/favorites" onClick={(event) => { event.preventDefault(); openFavorites(); }}>Favorites</a><a href="/shop/orders" onClick={(event) => { event.preventDefault(); openOrders(); }}>My orders</a><a href="/">Admin sign in</a></div><small>© {new Date().getFullYear()} Aqua. Made with care.</small></footer>
+      <footer className="store-footer"><a className="store-logo" href="/shop"><span className="store-logo-mark"><StoreIcon name="leaf" size={20} /></span><span><strong>AQUA</strong><small>THE LIVING SHOP</small></span></a><p>Thoughtful aquatics for slower, brighter days.</p><div><a href="#shop">Shop</a><a href="#care">Care</a><a href="#story">Journal</a><a href="/shop/contact" onClick={(event) => { event.preventDefault(); openContact(); }}>Contact</a><a href="/shop/favorites" onClick={(event) => { event.preventDefault(); openFavorites(); }}>Favorites</a><a href="/shop/orders" onClick={(event) => { event.preventDefault(); openOrders(); }}>My orders</a><a href="/shop/returns" onClick={(event) => { event.preventDefault(); openReturns(); }}>Returns</a><a href="/">Admin sign in</a></div><small>© {new Date().getFullYear()} Aqua. Made with care.</small></footer>
 
       {notice && <div className="store-toast"><StoreIcon name="check" size={16} />{notice}<button aria-label="Dismiss" onClick={() => setNotice("")}><StoreIcon name="close" size={15} /></button></div>}
       {selectedProduct && <ProductDetailView product={selectedProduct} selectedImage={selectedProductImage} quantity={detailQuantity} customerUser={customerUser} isFavorite={favoriteIds.includes(selectedProduct.id)} onToggleFavorite={() => toggleFavorite(selectedProduct.id)} onSelectImage={setSelectedProductImage} onQuantityChange={setDetailQuantity} onAdd={() => { handleProductAction(selectedProduct, detailQuantity); if (customerUser || !selectedProduct.inStock) setSelectedProduct(null); }} onClose={() => setSelectedProduct(null)} />}

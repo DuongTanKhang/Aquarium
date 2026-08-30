@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   ApiError,
+  clearAuthSession,
   clearAccessToken,
   getCurrentUser,
   login,
   logout,
   registerCustomer,
   saveAccessToken,
+  startAuthSession,
   sendEmailVerification,
   sendPhoneVerification,
   updateCustomerProfile,
@@ -44,6 +46,7 @@ export function CustomerAuthForm({ onAuthenticated, onCancel, embedded = false }
         return;
       }
       saveAccessToken(result.accessToken);
+      startAuthSession("CUSTOMER");
       const user = await getCurrentUser();
       if (user.role !== "CUSTOMER") throw new ApiError("Only customer accounts can use this portal.", 403);
       onAuthenticated(user);
@@ -147,6 +150,7 @@ export function CustomerEmailVerificationPage({ onBack, onAuthenticated }: { onB
       setState("success");
       try {
         saveAccessToken(session.accessToken);
+        startAuthSession("CUSTOMER");
         const user = await getCurrentUser();
         if (user.role === "CUSTOMER") onAuthenticated(user);
       } catch {
@@ -186,5 +190,5 @@ export default function CustomerAccountPage({ user, onUpdated, onLogout, onBack,
   };
 
   const initials = user.fullName.split(/\s+/).map((word) => word[0]).slice(0, 2).join("").toUpperCase();
-  return <main className="store-account-page"><div className="store-account-shell"><div className="store-orders-topbar"><button className="checkout-back" onClick={onBack}><span aria-hidden="true">←</span> Back to collection</button><div className="checkout-wordmark"><span>AQUA</span><small>THE LIVING SHOP</small></div><button className="checkout-secure account-signout" onClick={() => { void logout().catch(() => undefined); clearAccessToken(); onLogout(); }}>Sign out</button></div><header className="store-orders-heading"><div><span className="store-kicker">Your customer profile</span><h1>Welcome, <em>{user.fullName.split(" ")[0]}.</em></h1></div><p>Your profile belongs to you. Only you can change these details.</p></header><div className="account-layout"><section className="account-profile-card"><div className="account-avatar account-avatar-photo">{form.avatarUrl ? <img src={form.avatarUrl} alt="" /> : initials}</div><label className="account-photo-button">{form.avatarUrl ? "Change photo" : "Add a photo"}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseAvatar(event)} /></label>{form.avatarUrl && <button className="account-remove-photo" type="button" onClick={() => { setForm((current) => ({ ...current, avatarUrl: "" })); setAvatarChanged(true); }}>Remove photo</button>}<span className="store-kicker">Customer account</span><h2>{user.fullName}</h2><p>Member since {new Date(user.createdAt).getFullYear()}</p><button className="store-text-link" onClick={onOpenOrders}>View my orders <span aria-hidden="true">→</span></button></section><section className="account-edit-card"><div className="checkout-card-heading"><span>01</span><div><h2>Personal details</h2><p>Keep your delivery details current.</p></div></div><form className="account-edit-form" onSubmit={save}><label><span>Full name</span><input required minLength={2} maxLength={100} value={form.fullName} onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))} /></label><label><span>Email address <small>Read-only</small></span><input value={user.email} readOnly /></label><label><span>US phone number</span><input required type="tel" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} placeholder="+1 415 555 0123" /></label><label><span>Delivery address</span><textarea required minLength={5} maxLength={240} rows={3} value={form.address} onChange={(event) => setForm((current) => ({ ...current, address: event.target.value }))} placeholder="120 Ocean Avenue, Miami, FL 33101" /></label>{error && <p className="account-form-error" role="alert">{error}</p>}{notice && <p className="account-form-success">{notice}</p>}<button className="store-primary-button" type="submit" disabled={busy}>{busy ? "Saving…" : "Save profile"}<span aria-hidden="true">→</span></button></form></section></div><CustomerVerificationPanel user={user} onUpdated={onUpdated} /></div></main>;
+  return <main className="store-account-page"><div className="store-account-shell"><div className="store-orders-topbar"><button className="checkout-back" onClick={onBack}><span aria-hidden="true">←</span> Back to collection</button><div className="checkout-wordmark"><span>AQUA</span><small>THE LIVING SHOP</small></div><button className="checkout-secure account-signout" onClick={() => { void logout().catch(() => undefined); clearAccessToken(); clearAuthSession(); onLogout(); }}>Sign out</button></div><header className="store-orders-heading"><div><span className="store-kicker">Your customer profile</span><h1>Welcome, <em>{user.fullName.split(" ")[0]}.</em></h1></div><p>Your profile belongs to you. Only you can change these details.</p></header><div className="account-layout"><section className="account-profile-card"><div className="account-avatar account-avatar-photo">{form.avatarUrl ? <img src={form.avatarUrl} alt="" /> : initials}</div><label className="account-photo-button">{form.avatarUrl ? "Change photo" : "Add a photo"}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseAvatar(event)} /></label>{form.avatarUrl && <button className="account-remove-photo" type="button" onClick={() => { setForm((current) => ({ ...current, avatarUrl: "" })); setAvatarChanged(true); }}>Remove photo</button>}<span className="store-kicker">Customer account</span><h2>{user.fullName}</h2><p>Member since {new Date(user.createdAt).getFullYear()}</p><button className="store-text-link" onClick={onOpenOrders}>View my orders <span aria-hidden="true">→</span></button></section><section className="account-edit-card"><div className="checkout-card-heading"><span>01</span><div><h2>Personal details</h2><p>Keep your delivery details current.</p></div></div><form className="account-edit-form" onSubmit={save}><label><span>Full name</span><input required minLength={2} maxLength={100} value={form.fullName} onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))} /></label><label><span>Email address <small>Read-only</small></span><input value={user.email} readOnly /></label><label><span>US phone number</span><input required type="tel" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} placeholder="+1 415 555 0123" /></label><label><span>Delivery address</span><textarea required minLength={5} maxLength={240} rows={3} value={form.address} onChange={(event) => setForm((current) => ({ ...current, address: event.target.value }))} placeholder="120 Ocean Avenue, Miami, FL 33101" /></label>{error && <p className="account-form-error" role="alert">{error}</p>}{notice && <p className="account-form-success">{notice}</p>}<button className="store-primary-button" type="submit" disabled={busy}>{busy ? "Saving…" : "Save profile"}<span aria-hidden="true">→</span></button></form></section></div><CustomerVerificationPanel user={user} onUpdated={onUpdated} /></div></main>;
 }

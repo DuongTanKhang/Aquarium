@@ -171,7 +171,44 @@ export default function CustomerOrdersPage({ customer = null, onBack }: Customer
   );
 }
 
-function CustomerReturnsPanel({ customer, orders }: { customer?: CustomerUser | null; orders: PublicOrder[] }) {
+export function CustomerReturnsPage({ customer = null, onBack }: CustomerOrdersPageProps) {
+  const [orders, setOrders] = useState<PublicOrder[]>([]);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      if (!customer) return;
+      try {
+        const mine = await listMyOrders();
+        if (active) { setOrders(mine); setError(""); }
+      } catch (requestError: unknown) {
+        if (active) setError(requestError instanceof ApiError ? requestError.message : "We could not load your paid orders right now.");
+      }
+    };
+    void load();
+    const interval = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, ORDER_REFRESH_MS);
+    window.addEventListener("focus", load);
+    document.addEventListener("visibilitychange", load);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", load);
+      document.removeEventListener("visibilitychange", load);
+    };
+  }, [customer?.id]);
+
+  return <main className="store-orders-page">
+    <div className="store-orders-shell">
+      <div className="store-orders-topbar"><button className="checkout-back" onClick={onBack}><span aria-hidden="true">←</span> Back to collection</button><div className="checkout-wordmark"><span>AQUA</span><small>THE LIVING SHOP</small></div><span className="checkout-secure">⌑ Secure customer care</span></div>
+      <header className="store-orders-heading"><div><span className="store-kicker">Customer care</span><h1>Returns <em>& refunds.</em></h1></div><p>Start a return, refund, or exchange request and follow every decision from our care team.</p></header>
+      {error && <p className="orders-lookup-error" role="alert">{error}</p>}
+      <CustomerReturnsPanel customer={customer} orders={orders} />
+    </div>
+  </main>;
+}
+
+export function CustomerReturnsPanel({ customer, orders }: { customer?: CustomerUser | null; orders: PublicOrder[] }) {
   const [requests, setRequests] = useState<ReturnRequest[]>([]);
   const [orderId, setOrderId] = useState("");
   const [type, setType] = useState<ReturnRequestType>("REFUND");
